@@ -603,7 +603,11 @@ struct TaskPromise<void> : TaskPromiseImpl<TaskPromise<void>, void> {
         mAwaiter->returnVoid();
     }
 
+    // PERF 打开时下面那个带 source_location 默认实参的构造函数本身就是默认
+    // 构造函数，再留一个 TaskPromise() = default 会让零参构造产生重载歧义。
+#if !CO_ASYNC_PERF
     TaskPromise() = default;
+#endif
     TaskPromise(TaskPromise &&) = delete;
 
     TaskAwaiter<void> *mAwaiter{};
