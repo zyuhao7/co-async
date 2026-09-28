@@ -247,8 +247,10 @@ endif()
 find_package(Threads REQUIRED)
 target_link_libraries(co_async PUBLIC Threads::Threads)
 
-find_package(TBB REQUIRED COMPONENTS tbb REQUIRED)
-target_link_libraries(co_async PUBLIC TBB::tbb)
+find_package(TBB QUIET COMPONENTS tbb)
+if (TARGET TBB::tbb)
+    target_link_libraries(co_async PUBLIC TBB::tbb)
+endif()
 
 if (CO_ASYNC_JEMALLOC)
     find_package(PkgConfig REQUIRED)
