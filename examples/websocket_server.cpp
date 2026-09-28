@@ -108,8 +108,8 @@ static Task<Expected<>> amain(std::string addr) {
                 co_return {};
             });
             ws->on_pong([&] (std::chrono::steady_clock::duration dt) -> Task<Expected<>> {
-                co_await co_await stdio().putline("网络延迟: "s + to_string(
-                    std::chrono::duration_cast<std::chrono::milliseconds>(dt).count()) + "ms"s);
+                co_await co_await stdio().putline("网络延迟: "_s + to_string(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(dt).count()) + "ms"_s);
                 co_return {};
             });
             co_await co_await ws->start();

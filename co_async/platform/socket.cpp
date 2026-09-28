@@ -194,7 +194,9 @@ void SocketAddress::trySetPort(int port) {
 }
 
 String SocketAddress::toString() const {
-    return host() + ':' + to_string(port());
+    // host() 是 std::string，to_string() 返回 String；CO_ASYNC_ALLOC 打开时
+    // 后者是 std::pmr::string，两者不能直接 operator+。
+    return String(host()) + ':' + to_string(port());
 }
 
 // void SocketAddress::initFromHostPort(struct in_addr const &host, int port) {

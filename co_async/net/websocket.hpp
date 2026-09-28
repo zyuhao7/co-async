@@ -24,24 +24,24 @@ namespace co_async {
 // 我们这一期视频主要来实现 C++ 的服务器端，要求能够与浏览器中的 JS 建立 WebSocket 连接
 // 如果时间来得及，我们希望利用这个 WebSocket 服务器实现实时语音通话
 
-inline std::string websocketGenerateNonce() {
+inline String websocketGenerateNonce() {
     uint32_t seed = getSeedByTime();
     uint8_t buf[16];
     for (size_t i = 0; i != 16; ++i) {
         seed = wangsHash(seed);
         buf[i] = static_cast<uint8_t>(seed & 0xFF);
     }
-    return base64::encode_into<std::string>(buf, buf + 16);
+    return base64::encode_into<String>(buf, buf + 16);
 }
 
-inline std::string websocketSecretHash(std::string userKey) {
+inline String websocketSecretHash(String userKey) {
     // websocket 官方要求的神秘仪式
     SHA1 sha1;
-    std::string inKey = userKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    String inKey = userKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
     sha1.add(inKey.data(), inKey.size());
     uint8_t buf[SHA1::HashBytes];
     sha1.getHash(buf);
-    return base64::encode_into<std::string>(buf, buf + SHA1::HashBytes);
+    return base64::encode_into<String>(buf, buf + SHA1::HashBytes);
 }
 
 inline Task<Expected<bool>> httpUpgradeToWebSocket(HTTPServer::IO &io) {
@@ -291,17 +291,16 @@ inline Task<Expected<WebSocket>> websocket_server(HTTPServer::IO &io) {
 }
 
 inline Task<Expected<WebSocket>> websocket_client(HTTPConnection &conn, URI uri) {
-    std::string nonceKey;
-    using namespace std::string_literals;
+    String nonceKey;
     nonceKey = websocketGenerateNonce();
     HTTPRequest request = {
-        .method = "GET"s,
+        .method = "GET"_s,
         .uri = uri,
         .headers = {
-            {"sec-websocket-key"s, nonceKey},
-            {"connection"s, "Upgrade"s},
-            {"upgrade"s, "websocket"s},
-            {"sec-websocket-version"s, "13"s},
+            {"sec-websocket-key"_s, nonceKey},
+            {"connection"_s, "Upgrade"_s},
+            {"upgrade"_s, "websocket"_s},
+            {"sec-websocket-version"_s, "13"_s},
         },
     };
     auto [response, _] = co_await co_await conn.request(request);
