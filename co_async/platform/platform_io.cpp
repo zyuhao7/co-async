@@ -174,13 +174,13 @@ PlatformIOContext::addBuffers(std::span<std::span<char> const> bufs) {
 }
 
 void PlatformIOContext::reserveFiles(std::size_t nfiles) {
-    auto oldBuf = std::move(mBuffers);
-    mBuffers = std::make_unique<struct iovec[]>(nfiles);
+    auto oldBuf = std::move(mFiles);
+    mFiles = std::make_unique<int[]>(nfiles);
     if (mCapFiles) {
         throwingError(io_uring_unregister_files(&mRing));
     }
     mCapFiles = static_cast<unsigned int>(nfiles);
-    std::memcpy(mBuffers.get(), oldBuf.get(), sizeof(struct iovec) * mNumBufs);
+    std::memcpy(mFiles.get(), oldBuf.get(), sizeof(int) * mNumFiles);
     throwingError(io_uring_register_files_sparse(
         &mRing, static_cast<unsigned int>(nfiles)));
     std::vector<__u64> tags(mNumFiles, 0);
@@ -190,7 +190,7 @@ void PlatformIOContext::reserveFiles(std::size_t nfiles) {
 
 std::size_t PlatformIOContext::addFiles(std::span<int const> files) {
     if (mNumFiles >= mCapFiles) {
-        reserveBuffers(mCapFiles * 2 + 1);
+        reserveFiles(mCapFiles * 2 + 1);
     }
     auto outP = mFiles.get() + mNumFiles;
     for (auto const &file: files) {
