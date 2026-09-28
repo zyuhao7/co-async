@@ -17,6 +17,48 @@
 #include <co_async/utils/string_utils.hpp>
 
 namespace co_async {
+// 包装 request_streamed 返回的 body 读端：析构或 close 时取消后台读 body 的
+// 生产者协程。生产者一旦接手连接就独立于连接池生存，必须由读端显式终止，
+// 否则它挂在 socket recv 上时既会拖住 IOContext::run()（hasPendingEvents），
+// 也会让连接一直被占用。
+struct HTTPBodyStream : Stream {
+    OwningStream mInner;
+    std::shared_ptr<CancelSource> mCancel;
+
+    HTTPBodyStream(OwningStream inner, std::shared_ptr<CancelSource> cancel)
+        : mInner(std::move(inner)),
+          mCancel(std::move(cancel)) {}
+
+    Task<Expected<std::size_t>> raw_read(std::span<char> buffer) override {
+        return mInner.read(buffer);
+    }
+
+    Task<Expected<std::size_t>>
+    raw_write(std::span<char const> buffer) override {
+        return mInner.write(buffer);
+    }
+
+    Task<> raw_close() override {
+        co_await mInner.close();
+        if (mCancel) {
+            auto cancel = std::move(mCancel);
+            co_await cancel->cancel();
+        }
+        co_return;
+    }
+
+    ~HTTPBodyStream() override {
+        if (mCancel) {
+            // 析构函数里不能 co_await，把取消源的所有权移交给一个新协程，
+            // 由它保证 CancelSource 活到取消操作真正完成。
+            auto cancel = std::move(mCancel);
+            co_spawn(co_bind([cancel]() -> Task<> {
+                co_await cancel->cancel();
+            }));
+        }
+    }
+};
+
 struct HTTPConnection {
 private:
     struct HTTPProtocolFactory {
@@ -262,13 +304,22 @@ public:
         std::string body;
         co_await co_await mHttp->readResponse(res);
         auto [r, w] = pipe_stream();
-        co_spawn(pipe_bind(std::move(w),
-                           [this](OwningStream &w) -> Task<Expected<>> {
-                               co_await co_await mHttp->readBodyStream(w);
-                               co_return {};
-                           }));
+        // 连接的所有权转交给生产者协程：连接池析构时不能再碰这份连接，否则
+        // 生产者还挂在 recv 上时 socket/缓冲区被释放，醒来即 use-after-free。
+        auto http = std::move(mHttp);
+        auto cancel = std::make_shared<CancelSource>();
+        co_spawn(co_cancel.bind(
+            cancel->token(),
+            pipe_bind(std::move(w),
+                      [http = std::move(http),
+                       cancel](OwningStream &w) mutable -> Task<Expected<>> {
+                          (void)cancel; // 让取消源活满生产者的整个生命周期
+                          co_await co_await http->readBodyStream(w);
+                          co_return {};
+                      })));
         reset.neverMind();
-        co_return std::tuple{res, std::move(r)};
+        co_return std::tuple{
+            res, make_stream<HTTPBodyStream>(std::move(r), std::move(cancel))};
     }
 };
 
