@@ -2,3 +2,6 @@
 build*/
 benchmarks/
 perf.data*
+compile_commands.json
+.clangd
+.vscode/
