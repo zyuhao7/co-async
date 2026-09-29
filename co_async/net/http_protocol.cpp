@@ -273,15 +273,13 @@ Task<Expected<>> HTTPProtocolVersion11::readEncoded(BorrowedStream &body) {
     case HTTPContentEncoding::Deflate: {
         auto [r, w] = pipe_stream();
         co_await co_await when_all(
-            pipe_bind(std::move(w), &std::decay_t<decltype(*this)>::readChunked,
-                      this),
             co_bind([this, w = std::move(w)]() mutable -> Task<Expected<>> {
                 co_await co_await readChunked(w);
                 co_await co_await w.flush();
                 co_await w.close();
                 co_return {};
             }),
-            zlib_deflate(r, body));
+            zlib_inflate(r, body));
     } break;
     case HTTPContentEncoding::Gzip: {
         OwningStream pin, pout;
