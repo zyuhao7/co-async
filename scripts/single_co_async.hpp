@@ -2793,17 +2793,26 @@ struct CancelSourceImpl {
             co_return;
         }
         mCanceled = true;
-        if (!mCancellers.empty()) {
-            std::vector<Task<>> tasks;
-            for (auto &canceller: mCancellers) {
-                tasks.push_back(canceller.doCancel());
-            }
-            /* for (auto &&task: tasks) { */
-            /*     co_await task; */
-            /* } */
-            co_await when_all(tasks);
-            mCancellers.clear();
+        if (mCancellers.empty()) {
+            co_return;
         }
+        // 先把待取消项摘成裸指针表、并清空链表，再逐个回调：取消回调是同步
+        // 的（co_sleep 的 canceller 直接 resume 被取消的协程），被唤醒的协程
+        // 可能一路跑完并释放本 impl——取消源就建在同一个协程帧里是常见写法。
+        // 之后任何对 mCancellers 的访问（包括原来 for 循环的 ++ 和收尾的
+        // clear）都是释放后使用；节点析构时的自摘链也因为链接已被清空而变成
+        // 空操作。doCancel 的协程帧虽然还持有 this，但不再解引用它。
+        std::vector<CancellerBase *> cancellers;
+        for (auto &canceller: mCancellers) {
+            cancellers.push_back(&canceller);
+        }
+        mCancellers.clear();
+        std::vector<Task<>> tasks;
+        tasks.reserve(cancellers.size());
+        for (auto *canceller: cancellers) {
+            tasks.push_back(canceller->doCancel());
+        }
+        co_await when_all(tasks);
     }
 
     bool doIsCanceled() const noexcept {
@@ -4239,8 +4248,14 @@ public:
     // };
 
     Task<int> cancelGuard(CancelToken cancel) && {
+        // flags 必须留 0（按 user_data 精确取消这一个请求）。带
+        // IORING_ASYNC_CANCEL_ALL 时本机 5.15 内核在 io_async_cancel_prep 里
+        // 直接回 -EINVAL，取消请求本身失败、目标 op 照旧挂着——于是全库的
+        // cancelGuard（socket/futex/fs 十几个调用点）统统变成空操作。每个
+        // UringOp 的 user_data 就是它自己的地址（见构造函数里的
+        // io_uring_sqe_set_data），按 user_data 取消正是这里要的粒度。
         CancelCallback _(cancel, [this]() -> Task<> {
-            co_await UringOp().prep_cancel(this, IORING_ASYNC_CANCEL_ALL);
+            co_await UringOp().prep_cancel(this, 0);
         });
         co_return co_await std::move(*this);
     }
@@ -4472,23 +4487,37 @@ struct WhenAnyResult {
 template <Awaitable T, class Alloc = std::allocator<T>>
 Task<WhenAnyResult<typename AwaitableTraits<T>::AvoidRetType>>
 when_any(std::vector<T, Alloc> const &tasks) {
+    using Avoid = typename AwaitableTraits<T>::AvoidRetType;
+    using TaskAlloc =
+        typename std::allocator_traits<Alloc>::template rebind_alloc<Task<>>;
     CancelSource cancel(co_await co_cancel);
-    std::vector<Task<>, Alloc> newTasks(tasks.size(), tasks.get_allocator());
-    std::optional<typename AwaitableTraits<T>::RetType> result;
+    // 不能用 vector<Task<>, Alloc>(size, alloc)：Alloc 的 value_type 是调用方的
+    // 任务类型（例如 Task<int>），和元素类型 Task<> 不同，实例化就撞 vector 的
+    // 静态断言；而且 (count, alloc) 构造会先塞进 tasks.size() 个空 Task（空
+    // coroutine_handle），when_all 一 co_await 它们就是野句柄。
+    TaskAlloc alloc(tasks.get_allocator());
+    std::vector<Task<>, TaskAlloc> newTasks(alloc);
+    newTasks.reserve(tasks.size());
+    std::optional<Avoid> result;
     std::size_t index = static_cast<std::size_t>(-1);
     std::size_t i = 0;
-    for (auto &&task: tasks) {
+    // 捕获 &tasks + i（而不是循环变量 task 的引用），并把 result.emplace 放到
+    // 取消判定之后：否则先跑完的那个会调 cancel()，被取消的那个醒来后仍会
+    // 用自己（被取消得来的）返回值把胜者的结果覆盖掉，胜者的 index 配败者的
+    // value。变参版 when_any 就是这个顺序。
+    for (; i < tasks.size(); ++i) {
         newTasks.push_back(co_cancel.bind(
             cancel,
-            co_bind([&, i, cancel = cancel.token()]() mutable -> Task<> {
-                result.emplace((co_await std::move(task), Void()));
+            co_bind([&tasks, &result, &index, i,
+                     cancel = cancel.token()]() mutable -> Task<> {
+                auto res = (co_await std::move(tasks[i]), Void());
                 if (cancel.is_canceled()) {
                     co_return;
                 }
                 co_await cancel.cancel();
                 index = i;
+                result.emplace(std::move(res));
             })));
-        ++i;
     }
     co_await when_all(newTasks);
     co_return {std::move(result.value()), index};
@@ -10596,9 +10625,13 @@ struct ProcessBuilder {
         return *this;
     }
 
+    // O_CLOEXEC：两端都不能漏进子进程。本 builder 自己的子进程靠下面的
+    // close() 文件动作（addclose）清掉，但别的 builder 起的进程没这个动作，
+    // 只要我们还持有这两根流，它们就会把管道端一起 exec 进去，写端因此永不
+    // 见 EOF。dup2 的目标 fd 会被 dup2 清掉 CLOEXEC，子进程该拿到的那端不受影响。
     ProcessBuilder &pipe_out(int fd, OwningStream &stream) {
         int p[2];
-        throwingErrorErrno(pipe2(p, 0));
+        throwingErrorErrno(pipe2(p, O_CLOEXEC));
         open(fd, FileHandle(p[1]));
         stream = file_from_handle(FileHandle(p[0]));
         close(p[0]);
@@ -10608,7 +10641,7 @@ struct ProcessBuilder {
 
     ProcessBuilder &pipe_in(int fd, OwningStream &stream) {
         int p[2];
-        throwingErrorErrno(pipe2(p, 0));
+        throwingErrorErrno(pipe2(p, O_CLOEXEC));
         open(fd, FileHandle(p[0]));
         stream = file_from_handle(FileHandle(p[1]));
         close(p[0]);
@@ -10764,14 +10797,22 @@ struct FileWatch {
     };
 
     Task<Expected<WaitFileResult>> wait() {
-        if (!co_await mStream.getstruct(*mEventBuffer)) [[unlikely]] {
-            throw std::runtime_error("EOF while reading struct");
-        }
+        // 双重 co_await：外层拿 Task 里的 Expected，内层由 TaskPromise 的
+        // await_transform 接住——出错就地 return，不再 throw。原来读失败（尤其
+        // 是被取消时的 operation_canceled）直接 throw std::runtime_error，把取消
+        // 伪装成「EOF while reading struct」，没被接住就是 terminate/abort。
+        co_await co_await mStream.getstruct(*mEventBuffer);
         String name;
         name.reserve(mEventBuffer->len);
         co_await co_await mStream.getn(name, mEventBuffer->len);
         name = name.c_str();
-        auto path = mWatches.at(mEventBuffer->wd);
+        // 不能用 at()：删掉/被移走的 watch 会回 IN_IGNORED，wd 已不在表里，
+        // at() 抛 out_of_range 同样是从 Task<Expected<>> 里抛出。
+        auto it = mWatches.find(mEventBuffer->wd);
+        if (it == mWatches.end()) [[unlikely]] {
+            co_return std::errc::no_such_file_or_directory;
+        }
+        auto path = it->second;
         if (!name.empty()) {
             path /= make_path(name);
         }
