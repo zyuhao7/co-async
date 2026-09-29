@@ -263,10 +263,13 @@ Task<Expected<>> HTTPServer::handle_http(SocketHandle handle) const {
     auto err =
         co_await doHandleConnection(co_await prepareHTTP(std::move(handle)));
     if (err.has_error()) [[unlikely]] {
-        std::cerr << err.mErrorLocation.file_name() << ":"
-                  << err.mErrorLocation.line() << ": "
-                  << err.mErrorLocation.function_name() << ": "
-                  << err.error().message() << '\n';
+        // 单次 fprintf：一次写入、一次文件锁，16 个 worker 并发打错误时不会把
+        // 各自的四段相互穿插（多段 `std::cerr <<` 在负载下会拼成乱码）。
+        std::fprintf(stderr, "%s:%u: %s: %s\n",
+                     err.mErrorLocation.file_name(),
+                     static_cast<unsigned>(err.mErrorLocation.line()),
+                     err.mErrorLocation.function_name(),
+                     err.error().message().c_str());
         co_return err;
     }
 #else
