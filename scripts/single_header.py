@@ -10,8 +10,11 @@ sources = []
 headers = []
 
 # walk dir, all hpp and cpp files:
+# os.walk 的遍历顺序取决于文件系统，不同机器结果不同（生成物无法复现）；
+# 排序固定成字典序后输出才稳定。
 for root, dirs, files in os.walk(dir):
-    for file in files:
+    dirs.sort()
+    for file in sorted(files):
         if file.endswith(('.h', '.hpp', '.c', '.cpp')):
             # get full path of file
             path = os.path.join(root, file)

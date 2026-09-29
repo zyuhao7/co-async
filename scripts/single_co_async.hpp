@@ -443,275 +443,6 @@ private:
 
 
 namespace co_async {
-/* template <class T, class Final = void> */
-/* struct Generative { */
-/*     explicit operator bool() const noexcept { */
-/*     } */
-/* }; */
-
-template <class T, class E = void>
-struct GeneratorResult {
-    std::variant<T, E> mValue;
-
-    explicit GeneratorResult(std::in_place_index_t<0>, auto &&...args)
-        : mValue(std::in_place_index<0>,
-                 std::forward<decltype(args)>(args)...) {}
-
-    explicit GeneratorResult(std::in_place_index_t<1>, auto &&...args)
-        : mValue(std::in_place_index<1>,
-                 std::forward<decltype(args)>(args)...) {}
-
-    /* GeneratorResult(std::convertible_to<T> auto &&value) */
-
-    bool has_result() const noexcept {
-        return mValue.index() == 1;
-    }
-
-    bool has_value() const noexcept {
-        return mValue.index() == 0;
-    }
-
-    explicit operator bool() const noexcept {
-        return has_value();
-    }
-
-    T &operator*() & noexcept {
-        return *std::get_if<0>(&mValue);
-    }
-
-    T &&operator*() && noexcept {
-        return std::move(*std::get_if<0>(&mValue));
-    }
-
-    T const &operator*() const & noexcept {
-        return *std::get_if<0>(&mValue);
-    }
-
-    T const &&operator*() const && noexcept {
-        return std::move(*std::get_if<0>(&mValue));
-    }
-
-    T &operator->() noexcept {
-        return std::get_if<0>(&mValue);
-    }
-
-    T &value() & {
-        return std::get<0>(mValue);
-    }
-
-    T &&value() && {
-        return std::move(std::get<0>(mValue));
-    }
-
-    T const &value() const & {
-        return std::get<0>(mValue);
-    }
-
-    T const &&value() const && {
-        return std::move(std::get<0>(mValue));
-    }
-
-    E &result_unsafe() & noexcept {
-        return *std::get_if<1>(&mValue);
-    }
-
-    E &&result_unsafe() && noexcept {
-        return std::move(*std::get_if<1>(&mValue));
-    }
-
-    E const &result_unsafe() const & noexcept {
-        return *std::get_if<1>(&mValue);
-    }
-
-    E const &&result_unsafe() const && noexcept {
-        return std::move(*std::get_if<1>(&mValue));
-    }
-
-    E &result() & {
-        return std::get<1>(mValue);
-    }
-
-    E &&result() && {
-        return std::move(std::get<1>(mValue));
-    }
-
-    E const &result() const & {
-        return std::get<1>(mValue);
-    }
-
-    E const &&result() const && {
-        return std::move(std::get<1>(mValue));
-    }
-};
-
-template <class T>
-struct GeneratorResult<T, void> : GeneratorResult<T, Void> {
-    using GeneratorResult<T, Void>::GeneratorResult;
-};
-} // namespace co_async
-
-
-#if CO_ASYNC_PERF
-
-
-namespace co_async {
-struct Perf {
-private:
-    char const *file;
-    std::uint_least32_t line;
-    std::chrono::steady_clock::time_point t0;
-
-    struct PerfTableEntry {
-        std::uint64_t duration;
-        char const *file;
-        int line;
-    };
-
-    struct PerfThreadLocal {
-        std::deque<PerfTableEntry> table;
-        PerfThreadLocal() = default;
-        PerfThreadLocal(PerfThreadLocal &&) = delete;
-
-        ~PerfThreadLocal() {
-            gather(*this);
-        }
-    };
-
-    struct PerfGather {
-        /* PerfGather() { */
-        /*     signal( */
-        /*         SIGINT, +[](int signo) { std::exit(130); }); */
-        /* } */
-
-        PerfGather &operator=(PerfGather &&) = delete;
-
-        void dump() const {
-            if (table.empty()) {
-                return;
-            }
-
-            struct PairLess {
-                bool
-                operator()(std::pair<std::string_view, int> const &a,
-                           std::pair<std::string_view, int> const &b) const {
-                    return std::tie(a.first, a.second) <
-                           std::tie(b.first, b.second);
-                }
-            };
-
-            struct Entry {
-                std::uint64_t min = std::numeric_limits<std::uint64_t>::max();
-                std::uint64_t sum = 0;
-                std::uint64_t max = 0;
-                std::uint64_t nr = 0;
-
-                Entry &operator+=(std::uint64_t d) {
-                    min = std::min(min, d);
-                    sum += d;
-                    max = std::max(max, d);
-                    ++nr;
-                    return *this;
-                }
-            };
-
-            std::map<std::pair<std::string_view, int>, Entry, PairLess> m;
-            for (auto const &e: table) {
-                m[{e.file, e.line}] += e.duration;
-            }
-            auto t = [](std::uint64_t d) -> std::string {
-                if (d < 10000) {
-                    return std::format("{}ns", d);
-                } else if (d < 10'000'000) {
-                    return std::format("{}us", d / 1000);
-                } else if (d < 10'000'000'000) {
-                    return std::format("{}ms", d / 1'000'000);
-                } else if (d < 10'000'000'000'000) {
-                    return std::format("{}s", d / 1'000'000'000);
-                } else {
-                    return std::format("{}h", d / 3'600'000'000'000);
-                }
-            };
-            auto p = [](std::string_view s) -> std::string {
-                auto p = s.rfind('/');
-                if (p == std::string_view::npos) {
-                    return std::string(s);
-                } else {
-                    return std::string(s.substr(p + 1));
-                }
-            };
-            std::vector<std::pair<std::pair<std::string_view, int>, Entry>>
-                sorted(m.begin(), m.end());
-            std::sort(sorted.begin(), sorted.end(),
-                      [](auto const &lhs, auto const &rhs) {
-                          return lhs.second.sum > rhs.second.sum;
-                      });
-            std::size_t w = 0, nw = 1;
-            for (auto const &[loc, e]: sorted) {
-                w = std::max(w, p(loc.first).size());
-                nw = std::max(nw, std::to_string(e.nr).size());
-            }
-            std::string o;
-            auto oit = std::back_inserter(o);
-            std::format_to(oit, "{:>{}}:{:<4} {:^6} {:^6} {:^6} {:^6} {:^{}}\n",
-                           "file", w, "line", "min", "avg", "max", "sum", "nr",
-                           nw + 1);
-            for (auto const &[loc, e]: sorted) {
-                std::format_to(oit,
-                               "{:>{}}:{:<4} {:>6} {:>6} {:>6} {:>6} {:>{}}x\n",
-                               p(loc.first), w, loc.second, t(e.min),
-                               t(e.sum / e.nr), t(e.max), t(e.sum), e.nr, nw);
-            }
-            fprintf(stderr, "%s", o.c_str());
-        }
-
-        ~PerfGather() {
-            for (auto *thread: threads) {
-                gather(*thread);
-            }
-            dump();
-        }
-
-        std::deque<PerfTableEntry> table;
-        std::set<PerfThreadLocal *> threads;
-        std::mutex lock;
-    };
-
-    static inline PerfGather gathered;
-    static inline thread_local PerfThreadLocal perthread;
-
-    static void gather(PerfThreadLocal &perthread) {
-        std::lock_guard guard(gathered.lock);
-        gathered.table.insert(gathered.table.end(), perthread.table.begin(),
-                              perthread.table.end());
-        gathered.threads.erase(&perthread);
-    }
-
-public:
-    Perf(std::source_location loc = std::source_location::current())
-        : file(loc.file_name()),
-          line(loc.line()),
-          t0(std::chrono::steady_clock::now()) {}
-
-    Perf(Perf &&) = delete;
-
-    ~Perf() {
-        auto t1 = std::chrono::steady_clock::now();
-        auto duration = (t1 - t0).count();
-        perthread.table.emplace_back(duration, file, line);
-    }
-};
-} // namespace co_async
-#else
-namespace co_async {
-struct Perf {};
-} // namespace co_async
-#endif
-
-
-
-
-
-namespace co_async {
 
 template <class T, class U>
 concept WeaklyEqComparable = requires(T const &t, U const &u) {
@@ -1170,8 +901,8 @@ struct [[nodiscard("Expected<T> return values must be handled, use co_await to "
                    "propagate")]] Expected<void> : Expected<Void> {
     using Expected<Void>::Expected;
 
-    Expected<void>(Expected<Void> const &that) noexcept : Expected<Void>(that) {}
-    Expected<void>(Expected<Void> &&that) noexcept : Expected<Void>(std::move(that)) {}
+    Expected(Expected<Void> const &that) noexcept : Expected<Void>(that) {}
+    Expected(Expected<Void> &&that) noexcept : Expected<Void>(std::move(that)) {}
 };
 
 template <class T>
@@ -1185,6 +916,275 @@ Expected() -> Expected<>;
 #undef CO_ASYNC_EXPECTED_LOCATION_ASSIGN
 #undef CO_ASYNC_EXPECTED_LOCATION_ARG
 } // namespace co_async
+
+
+
+
+
+namespace co_async {
+/* template <class T, class Final = void> */
+/* struct Generative { */
+/*     explicit operator bool() const noexcept { */
+/*     } */
+/* }; */
+
+template <class T, class E = void>
+struct GeneratorResult {
+    std::variant<T, E> mValue;
+
+    explicit GeneratorResult(std::in_place_index_t<0>, auto &&...args)
+        : mValue(std::in_place_index<0>,
+                 std::forward<decltype(args)>(args)...) {}
+
+    explicit GeneratorResult(std::in_place_index_t<1>, auto &&...args)
+        : mValue(std::in_place_index<1>,
+                 std::forward<decltype(args)>(args)...) {}
+
+    /* GeneratorResult(std::convertible_to<T> auto &&value) */
+
+    bool has_result() const noexcept {
+        return mValue.index() == 1;
+    }
+
+    bool has_value() const noexcept {
+        return mValue.index() == 0;
+    }
+
+    explicit operator bool() const noexcept {
+        return has_value();
+    }
+
+    T &operator*() & noexcept {
+        return *std::get_if<0>(&mValue);
+    }
+
+    T &&operator*() && noexcept {
+        return std::move(*std::get_if<0>(&mValue));
+    }
+
+    T const &operator*() const & noexcept {
+        return *std::get_if<0>(&mValue);
+    }
+
+    T const &&operator*() const && noexcept {
+        return std::move(*std::get_if<0>(&mValue));
+    }
+
+    T &operator->() noexcept {
+        return std::get_if<0>(&mValue);
+    }
+
+    T &value() & {
+        return std::get<0>(mValue);
+    }
+
+    T &&value() && {
+        return std::move(std::get<0>(mValue));
+    }
+
+    T const &value() const & {
+        return std::get<0>(mValue);
+    }
+
+    T const &&value() const && {
+        return std::move(std::get<0>(mValue));
+    }
+
+    E &result_unsafe() & noexcept {
+        return *std::get_if<1>(&mValue);
+    }
+
+    E &&result_unsafe() && noexcept {
+        return std::move(*std::get_if<1>(&mValue));
+    }
+
+    E const &result_unsafe() const & noexcept {
+        return *std::get_if<1>(&mValue);
+    }
+
+    E const &&result_unsafe() const && noexcept {
+        return std::move(*std::get_if<1>(&mValue));
+    }
+
+    E &result() & {
+        return std::get<1>(mValue);
+    }
+
+    E &&result() && {
+        return std::move(std::get<1>(mValue));
+    }
+
+    E const &result() const & {
+        return std::get<1>(mValue);
+    }
+
+    E const &&result() const && {
+        return std::move(std::get<1>(mValue));
+    }
+};
+
+template <class T>
+struct GeneratorResult<T, void> : GeneratorResult<T, Void> {
+    using GeneratorResult<T, Void>::GeneratorResult;
+};
+} // namespace co_async
+
+
+#if CO_ASYNC_PERF
+
+
+namespace co_async {
+struct Perf {
+private:
+    char const *file;
+    std::uint_least32_t line;
+    std::chrono::steady_clock::time_point t0;
+
+    struct PerfTableEntry {
+        std::uint64_t duration;
+        char const *file;
+        int line;
+    };
+
+    struct PerfThreadLocal {
+        std::deque<PerfTableEntry> table;
+        PerfThreadLocal() = default;
+        PerfThreadLocal(PerfThreadLocal &&) = delete;
+
+        ~PerfThreadLocal() {
+            gather(*this);
+        }
+    };
+
+    struct PerfGather {
+        /* PerfGather() { */
+        /*     signal( */
+        /*         SIGINT, +[](int signo) { std::exit(130); }); */
+        /* } */
+
+        PerfGather &operator=(PerfGather &&) = delete;
+
+        void dump() const {
+            if (table.empty()) {
+                return;
+            }
+
+            struct PairLess {
+                bool
+                operator()(std::pair<std::string_view, int> const &a,
+                           std::pair<std::string_view, int> const &b) const {
+                    return std::tie(a.first, a.second) <
+                           std::tie(b.first, b.second);
+                }
+            };
+
+            struct Entry {
+                std::uint64_t min = std::numeric_limits<std::uint64_t>::max();
+                std::uint64_t sum = 0;
+                std::uint64_t max = 0;
+                std::uint64_t nr = 0;
+
+                Entry &operator+=(std::uint64_t d) {
+                    min = std::min(min, d);
+                    sum += d;
+                    max = std::max(max, d);
+                    ++nr;
+                    return *this;
+                }
+            };
+
+            std::map<std::pair<std::string_view, int>, Entry, PairLess> m;
+            for (auto const &e: table) {
+                m[{e.file, e.line}] += e.duration;
+            }
+            auto t = [](std::uint64_t d) -> std::string {
+                if (d < 10000) {
+                    return std::format("{}ns", d);
+                } else if (d < 10'000'000) {
+                    return std::format("{}us", d / 1000);
+                } else if (d < 10'000'000'000) {
+                    return std::format("{}ms", d / 1'000'000);
+                } else if (d < 10'000'000'000'000) {
+                    return std::format("{}s", d / 1'000'000'000);
+                } else {
+                    return std::format("{}h", d / 3'600'000'000'000);
+                }
+            };
+            auto p = [](std::string_view s) -> std::string {
+                auto p = s.rfind('/');
+                if (p == std::string_view::npos) {
+                    return std::string(s);
+                } else {
+                    return std::string(s.substr(p + 1));
+                }
+            };
+            std::vector<std::pair<std::pair<std::string_view, int>, Entry>>
+                sorted(m.begin(), m.end());
+            std::sort(sorted.begin(), sorted.end(),
+                      [](auto const &lhs, auto const &rhs) {
+                          return lhs.second.sum > rhs.second.sum;
+                      });
+            std::size_t w = 0, nw = 1;
+            for (auto const &[loc, e]: sorted) {
+                w = std::max(w, p(loc.first).size());
+                nw = std::max(nw, std::to_string(e.nr).size());
+            }
+            std::string o;
+            auto oit = std::back_inserter(o);
+            std::format_to(oit, "{:>{}}:{:<4} {:^6} {:^6} {:^6} {:^6} {:^{}}\n",
+                           "file", w, "line", "min", "avg", "max", "sum", "nr",
+                           nw + 1);
+            for (auto const &[loc, e]: sorted) {
+                std::format_to(oit,
+                               "{:>{}}:{:<4} {:>6} {:>6} {:>6} {:>6} {:>{}}x\n",
+                               p(loc.first), w, loc.second, t(e.min),
+                               t(e.sum / e.nr), t(e.max), t(e.sum), e.nr, nw);
+            }
+            fprintf(stderr, "%s", o.c_str());
+        }
+
+        ~PerfGather() {
+            for (auto *thread: threads) {
+                gather(*thread);
+            }
+            dump();
+        }
+
+        std::deque<PerfTableEntry> table;
+        std::set<PerfThreadLocal *> threads;
+        std::mutex lock;
+    };
+
+    static inline PerfGather gathered;
+    static inline thread_local PerfThreadLocal perthread;
+
+    static void gather(PerfThreadLocal &perthread) {
+        std::lock_guard guard(gathered.lock);
+        gathered.table.insert(gathered.table.end(), perthread.table.begin(),
+                              perthread.table.end());
+        gathered.threads.erase(&perthread);
+    }
+
+public:
+    Perf(std::source_location loc = std::source_location::current())
+        : file(loc.file_name()),
+          line(loc.line()),
+          t0(std::chrono::steady_clock::now()) {}
+
+    Perf(Perf &&) = delete;
+
+    ~Perf() {
+        auto t1 = std::chrono::steady_clock::now();
+        auto duration = (t1 - t0).count();
+        perthread.table.emplace_back(duration, file, line);
+    }
+};
+} // namespace co_async
+#else
+namespace co_async {
+struct Perf {};
+} // namespace co_async
+#endif
 
 
 
@@ -1791,7 +1791,11 @@ struct TaskPromise<void> : TaskPromiseImpl<TaskPromise<void>, void> {
         mAwaiter->returnVoid();
     }
 
+    // PERF 打开时下面那个带 source_location 默认实参的构造函数本身就是默认
+    // 构造函数，再留一个 TaskPromise() = default 会让零参构造产生重载歧义。
+#if !CO_ASYNC_PERF
     TaskPromise() = default;
+#endif
     TaskPromise(TaskPromise &&) = delete;
 
     TaskAwaiter<void> *mAwaiter{};
@@ -2121,42 +2125,6 @@ when_all(std::vector<T, Alloc> const &tasks) {
 
 
 
-
-
-namespace co_async {
-template <Awaitable A>
-A ensureAwaitable(A a) {
-    return std::move(a);
-}
-
-template <class A>
-    requires(!Awaitable<A>)
-Task<A> ensureAwaitable(A a) {
-    co_return std::move(a);
-}
-
-template <Awaitable A>
-Task<typename AwaitableTraits<A>::RetType> ensureTask(A a) {
-    co_return co_await std::move(a);
-}
-
-template <class T>
-Task<T> ensureTask(Task<T> &&t) {
-    return std::move(t);
-}
-
-template <class A>
-    requires(!Awaitable<A> && std::invocable<A> &&
-             Awaitable<std::invoke_result_t<A>>)
-Task<typename AwaitableTraits<std::invoke_result_t<A>>::RetType>
-ensureTask(A a) {
-    return ensureTask(std::invoke(std::move(a)));
-}
-} // namespace co_async
-
-
-
-
 namespace co_async {
 struct CurrentCoroutineAwaiter {
     bool await_ready() const noexcept {
@@ -2255,6 +2223,42 @@ struct AutoDestroyFinalAwaiter {
 
     void await_resume() const noexcept {}
 };
+} // namespace co_async
+
+
+
+
+
+
+namespace co_async {
+template <Awaitable A>
+A ensureAwaitable(A a) {
+    return std::move(a);
+}
+
+template <class A>
+    requires(!Awaitable<A>)
+Task<A> ensureAwaitable(A a) {
+    co_return std::move(a);
+}
+
+template <Awaitable A>
+Task<typename AwaitableTraits<A>::RetType> ensureTask(A a) {
+    co_return co_await std::move(a);
+}
+
+template <class T>
+Task<T> ensureTask(Task<T> &&t) {
+    return std::move(t);
+}
+
+template <class A>
+    requires(!Awaitable<A> && std::invocable<A> &&
+             Awaitable<std::invoke_result_t<A>>)
+Task<typename AwaitableTraits<std::invoke_result_t<A>>::RetType>
+ensureTask(A a) {
+    return ensureTask(std::invoke(std::move(a)));
+}
 } // namespace co_async
 
 
@@ -3046,6 +3050,119 @@ inline constexpr GetThisCancel co_cancel;
 
 
 
+namespace co_async {
+#if __cpp_lib_hardware_interference_size
+using std::hardware_constructive_interference_size;
+using std::hardware_destructive_interference_size;
+#else
+constexpr std::size_t hardware_constructive_interference_size = 64;
+constexpr std::size_t hardware_destructive_interference_size = 64;
+#endif
+} // namespace co_async
+
+
+
+
+namespace co_async {
+template <class T>
+struct RingQueue {
+    std::unique_ptr<T[]> mHead;
+    T *mTail;
+    T *mRead;
+    T *mWrite;
+
+    explicit RingQueue(std::size_t maxSize = 0)
+        : mHead(maxSize ? std::make_unique<T[]>(maxSize) : nullptr),
+          mTail(maxSize ? mHead.get() + maxSize : nullptr),
+          mRead(mHead.get()),
+          mWrite(mHead.get()) {}
+
+    void set_max_size(std::size_t maxSize) {
+        mHead = maxSize ? std::make_unique<T[]>(maxSize) : nullptr;
+        mTail = maxSize ? mHead.get() + maxSize : nullptr;
+        mRead = mHead.get();
+        mWrite = mHead.get();
+    }
+
+    [[nodiscard]] std::size_t max_size() const noexcept {
+        return mTail - mHead.get();
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept {
+        return static_cast<std::size_t>(mWrite - mRead + max_size()) %
+               max_size();
+    }
+
+    [[nodiscard]] bool empty() const noexcept {
+        return mRead == mWrite;
+    }
+
+    [[nodiscard]] bool full() const noexcept {
+        T *nextWrite = mWrite == mTail ? mHead.get() : mWrite + 1;
+        return nextWrite == mRead;
+    }
+
+    [[nodiscard]] std::optional<T> pop() {
+        if (mRead == mWrite) {
+            return std::nullopt;
+        }
+        T p = std::move(*mRead);
+        mRead = mRead == mTail ? mHead.get() : mRead + 1;
+        return p;
+    }
+
+    [[nodiscard]] T pop_unchecked() {
+        T p = std::move(*mRead);
+        mRead = mRead == mTail ? mHead.get() : mRead + 1;
+        return p;
+    }
+
+    [[nodiscard]] bool push(T &&value) {
+        T *nextWrite = mWrite == mTail ? mHead.get() : mWrite + 1;
+        if (nextWrite == mRead) {
+            return false;
+        }
+        *mWrite = std::move(value);
+        mWrite = nextWrite;
+        return true;
+    }
+
+    void push_unchecked(T &&value) {
+        T *nextWrite = mWrite == mTail ? mHead.get() : mWrite + 1;
+        *mWrite = std::move(value);
+        mWrite = nextWrite;
+    }
+};
+
+template <class T>
+struct InfinityQueue {
+    [[nodiscard]] std::optional<T> pop() {
+        if (mQueue.empty()) {
+            return std::nullopt;
+        }
+        T value = std::move(mQueue.front());
+        mQueue.pop_front();
+        return value;
+    }
+
+    [[nodiscard]] T pop_unchecked() {
+        T value = std::move(mQueue.front());
+        mQueue.pop_front();
+        return value;
+    }
+
+    void push(T &&value) {
+        mQueue.push_back(std::move(value));
+    }
+
+private:
+    std::deque<T> mQueue;
+};
+} // namespace co_async
+
+
+
+
 
 namespace co_async {
 
@@ -3066,6 +3183,120 @@ struct SpinMutex {
     std::atomic_flag flag{false};
 };
 
+} // namespace co_async
+
+
+
+
+
+
+
+namespace co_async {
+template <class T, std::size_t Capacity = 0>
+struct alignas(hardware_destructive_interference_size) ConcurrentRingQueue {
+    static constexpr std::size_t Shift = std::bit_width(Capacity);
+    using Stamp = std::conditional_t<
+        Shift <= 4, std::uint8_t,
+        std::conditional_t<
+            Shift <= 8, std::uint16_t,
+            std::conditional_t<Shift <= 16, std::uint32_t, std::uint64_t>>>;
+    static_assert(Shift * 2 <= sizeof(Stamp) * 8);
+    static_assert(Capacity < (1 << Shift));
+    static constexpr Stamp kSize = 1 << Shift;
+
+    [[nodiscard]] std::optional<T> pop() {
+        auto s = mStamp.load(std::memory_order_relaxed);
+        if (!canRead(s)) {
+            return std::nullopt;
+        }
+        while (!mStamp.compare_exchange_weak(s, advectRead(s),
+                                             std::memory_order_acq_rel,
+                                             std::memory_order_relaxed)) {
+            if (!canRead(s)) {
+                return std::nullopt;
+            }
+        }
+        return std::move(mHead[offsetRead(s)]);
+    }
+
+    [[nodiscard]] bool push(T &&value) {
+        auto s = mStamp.load(std::memory_order_relaxed);
+        if (!canWrite(s)) [[unlikely]] {
+            return false;
+        }
+        while (!mStamp.compare_exchange_weak(s, advectWrite(s),
+                                             std::memory_order_acq_rel,
+                                             std::memory_order_relaxed)) {
+            if (!canWrite(s)) [[unlikely]] {
+                return false;
+            }
+        }
+        mHead[offsetWrite(s)] = std::move(value);
+        return true;
+    }
+
+    ConcurrentRingQueue() = default;
+    ConcurrentRingQueue(ConcurrentRingQueue &&) = delete;
+
+private:
+    inline Stamp offsetRead(Stamp s) const {
+        return s >> Shift;
+    }
+
+    inline Stamp offsetWrite(Stamp s) const {
+        return s & (kSize - 1);
+    }
+
+    inline bool canRead(Stamp s) const {
+        return offsetRead(s) != offsetWrite(s);
+    }
+
+    inline bool canWrite(Stamp s) const {
+        return (offsetRead(s) & static_cast<Stamp>(kSize - 1)) !=
+               ((offsetWrite(s) + static_cast<Stamp>(kSize - Capacity)) &
+                static_cast<Stamp>(kSize - 1));
+    }
+
+    inline Stamp advectRead(Stamp s) const {
+        return static_cast<Stamp>(
+                   ((static_cast<Stamp>(s >> Shift) + static_cast<Stamp>(1)) &
+                    static_cast<Stamp>(kSize - 1))
+                   << Shift) |
+               (s & static_cast<Stamp>(kSize - 1));
+    }
+
+    inline Stamp advectWrite(Stamp s) const {
+        return (((s & static_cast<Stamp>(kSize - 1)) + static_cast<Stamp>(1)) &
+                static_cast<Stamp>(kSize - 1)) |
+               static_cast<Stamp>(s & (static_cast<Stamp>(kSize - 1) << Shift));
+    }
+
+    std::unique_ptr<T[]> const mHead = std::make_unique<T[]>(kSize);
+    std::atomic<Stamp> mStamp{0};
+};
+
+template <class T>
+struct alignas(hardware_destructive_interference_size)
+    ConcurrentRingQueue<T, 0> {
+    std::optional<T> pop() {
+        std::lock_guard lck(mMutex);
+        if (mQueue.empty()) {
+            return std::nullopt;
+        }
+        T p = std::move(mQueue.front());
+        mQueue.pop_front();
+        return p;
+    }
+
+    void push(T &&value) {
+        std::lock_guard lck(mMutex);
+        mQueue.push_back(std::move(value));
+    }
+
+private:
+    std::deque<T> mQueue;
+    SpinMutex mMutex;
+};
 } // namespace co_async
 
 
@@ -3437,233 +3668,6 @@ public:
 // private:
 //     std::mutex mMutex;
 // };
-} // namespace co_async
-
-
-
-
-namespace co_async {
-template <class T>
-struct RingQueue {
-    std::unique_ptr<T[]> mHead;
-    T *mTail;
-    T *mRead;
-    T *mWrite;
-
-    explicit RingQueue(std::size_t maxSize = 0)
-        : mHead(maxSize ? std::make_unique<T[]>(maxSize) : nullptr),
-          mTail(maxSize ? mHead.get() + maxSize : nullptr),
-          mRead(mHead.get()),
-          mWrite(mHead.get()) {}
-
-    void set_max_size(std::size_t maxSize) {
-        mHead = maxSize ? std::make_unique<T[]>(maxSize) : nullptr;
-        mTail = maxSize ? mHead.get() + maxSize : nullptr;
-        mRead = mHead.get();
-        mWrite = mHead.get();
-    }
-
-    [[nodiscard]] std::size_t max_size() const noexcept {
-        return mTail - mHead.get();
-    }
-
-    [[nodiscard]] std::size_t size() const noexcept {
-        return static_cast<std::size_t>(mWrite - mRead + max_size()) %
-               max_size();
-    }
-
-    [[nodiscard]] bool empty() const noexcept {
-        return mRead == mWrite;
-    }
-
-    [[nodiscard]] bool full() const noexcept {
-        T *nextWrite = mWrite == mTail ? mHead.get() : mWrite + 1;
-        return nextWrite == mRead;
-    }
-
-    [[nodiscard]] std::optional<T> pop() {
-        if (mRead == mWrite) {
-            return std::nullopt;
-        }
-        T p = std::move(*mRead);
-        mRead = mRead == mTail ? mHead.get() : mRead + 1;
-        return p;
-    }
-
-    [[nodiscard]] T pop_unchecked() {
-        T p = std::move(*mRead);
-        mRead = mRead == mTail ? mHead.get() : mRead + 1;
-        return p;
-    }
-
-    [[nodiscard]] bool push(T &&value) {
-        T *nextWrite = mWrite == mTail ? mHead.get() : mWrite + 1;
-        if (nextWrite == mRead) {
-            return false;
-        }
-        *mWrite = std::move(value);
-        mWrite = nextWrite;
-        return true;
-    }
-
-    void push_unchecked(T &&value) {
-        T *nextWrite = mWrite == mTail ? mHead.get() : mWrite + 1;
-        *mWrite = std::move(value);
-        mWrite = nextWrite;
-    }
-};
-
-template <class T>
-struct InfinityQueue {
-    [[nodiscard]] std::optional<T> pop() {
-        if (mQueue.empty()) {
-            return std::nullopt;
-        }
-        T value = std::move(mQueue.front());
-        mQueue.pop_front();
-        return value;
-    }
-
-    [[nodiscard]] T pop_unchecked() {
-        T value = std::move(mQueue.front());
-        mQueue.pop_front();
-        return value;
-    }
-
-    void push(T &&value) {
-        mQueue.push_back(std::move(value));
-    }
-
-private:
-    std::deque<T> mQueue;
-};
-} // namespace co_async
-
-
-
-
-namespace co_async {
-#if __cpp_lib_hardware_interference_size
-using std::hardware_constructive_interference_size;
-using std::hardware_destructive_interference_size;
-#else
-constexpr std::size_t hardware_constructive_interference_size = 64;
-constexpr std::size_t hardware_destructive_interference_size = 64;
-#endif
-} // namespace co_async
-
-
-
-
-
-
-
-namespace co_async {
-template <class T, std::size_t Capacity = 0>
-struct alignas(hardware_destructive_interference_size) ConcurrentRingQueue {
-    static constexpr std::size_t Shift = std::bit_width(Capacity);
-    using Stamp = std::conditional_t<
-        Shift <= 4, std::uint8_t,
-        std::conditional_t<
-            Shift <= 8, std::uint16_t,
-            std::conditional_t<Shift <= 16, std::uint32_t, std::uint64_t>>>;
-    static_assert(Shift * 2 <= sizeof(Stamp) * 8);
-    static_assert(Capacity < (1 << Shift));
-    static constexpr Stamp kSize = 1 << Shift;
-
-    [[nodiscard]] std::optional<T> pop() {
-        auto s = mStamp.load(std::memory_order_relaxed);
-        if (!canRead(s)) {
-            return std::nullopt;
-        }
-        while (!mStamp.compare_exchange_weak(s, advectRead(s),
-                                             std::memory_order_acq_rel,
-                                             std::memory_order_relaxed)) {
-            if (!canRead(s)) {
-                return std::nullopt;
-            }
-        }
-        return std::move(mHead[offsetRead(s)]);
-    }
-
-    [[nodiscard]] bool push(T &&value) {
-        auto s = mStamp.load(std::memory_order_relaxed);
-        if (!canWrite(s)) [[unlikely]] {
-            return false;
-        }
-        while (!mStamp.compare_exchange_weak(s, advectWrite(s),
-                                             std::memory_order_acq_rel,
-                                             std::memory_order_relaxed)) {
-            if (!canWrite(s)) [[unlikely]] {
-                return false;
-            }
-        }
-        mHead[offsetWrite(s)] = std::move(value);
-        return true;
-    }
-
-    ConcurrentRingQueue() = default;
-    ConcurrentRingQueue(ConcurrentRingQueue &&) = delete;
-
-private:
-    inline Stamp offsetRead(Stamp s) const {
-        return s >> Shift;
-    }
-
-    inline Stamp offsetWrite(Stamp s) const {
-        return s & (kSize - 1);
-    }
-
-    inline bool canRead(Stamp s) const {
-        return offsetRead(s) != offsetWrite(s);
-    }
-
-    inline bool canWrite(Stamp s) const {
-        return (offsetRead(s) & static_cast<Stamp>(kSize - 1)) !=
-               ((offsetWrite(s) + static_cast<Stamp>(kSize - Capacity)) &
-                static_cast<Stamp>(kSize - 1));
-    }
-
-    inline Stamp advectRead(Stamp s) const {
-        return static_cast<Stamp>(
-                   ((static_cast<Stamp>(s >> Shift) + static_cast<Stamp>(1)) &
-                    static_cast<Stamp>(kSize - 1))
-                   << Shift) |
-               (s & static_cast<Stamp>(kSize - 1));
-    }
-
-    inline Stamp advectWrite(Stamp s) const {
-        return (((s & static_cast<Stamp>(kSize - 1)) + static_cast<Stamp>(1)) &
-                static_cast<Stamp>(kSize - 1)) |
-               static_cast<Stamp>(s & (static_cast<Stamp>(kSize - 1) << Shift));
-    }
-
-    std::unique_ptr<T[]> const mHead = std::make_unique<T[]>(kSize);
-    std::atomic<Stamp> mStamp{0};
-};
-
-template <class T>
-struct alignas(hardware_destructive_interference_size)
-    ConcurrentRingQueue<T, 0> {
-    std::optional<T> pop() {
-        std::lock_guard lck(mMutex);
-        if (mQueue.empty()) {
-            return std::nullopt;
-        }
-        T p = std::move(mQueue.front());
-        mQueue.pop_front();
-        return p;
-    }
-
-    void push(T &&value) {
-        std::lock_guard lck(mMutex);
-        mQueue.push_back(std::move(value));
-    }
-
-private:
-    std::deque<T> mQueue;
-    SpinMutex mMutex;
-};
 } // namespace co_async
 
 
@@ -4567,6 +4571,8 @@ co_timeout(A &&a, Timeout timeout) {
 
 
 
+#include <cerrno>
+#include <ctime>
 #include <linux/futex.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -4600,6 +4606,19 @@ inline constexpr uint64_t futexValueExtend(T value) {
     return ret;
 }
 
+// syscall(2) 失败时返回 -1、原因在 errno，和 io_uring 的「返回负 errno」
+// 约定不同；统一转换后再交给 expectError，否则 -1 会被误读成 EPERM。
+inline int syscallResult(long res) {
+    return res < 0 ? -errno : static_cast<int>(res);
+}
+
+// 经典 FUTEX_WAIT_BITSET 是阻塞调用，必须给时限：否则它会永久卡住事件循环
+// 线程，同一线程上的 futex_notify 再也跑不到，而那个 notify 正是唤醒它的
+// 唯一手段。超时按 EAGAIN（伪唤醒）上报 —— futex API 本就允许伪唤醒，
+// futex_wait 的 .ignore_error(resource_unavailable_try_again) 与调用方的
+// 重检循环都能接住。
+inline constexpr auto kFutexSyncWaitPoll = std::chrono::milliseconds(10);
+
 template <class T>
 inline Expected<> futex_notify_sync(std::atomic<T> *futex,
                                     std::size_t count = kFutexNotifyAll,
@@ -4611,12 +4630,16 @@ inline Expected<> futex_notify_sync(std::atomic<T> *futex,
             static_cast<uint64_t>(count), static_cast<uint64_t>(mask),
             getFutexFlagsFor<T>());
 #if CO_ASYNC_INVALFIX
-    if (res == -EBADF || res == -ENOSYS) {
-        res = syscall(SYS_futex, reinterpret_cast<uint32_t *>(futex), FUTEX_WAKE_BITSET_PRIVATE,
-                static_cast<uint32_t>(count), nullptr, nullptr, mask);
+    // futex_wake(454) 是 6.7 才有的系统调用，更老的内核回 ENOSYS；退到
+    // 经典的 FUTEX_WAKE_BITSET（2.6.25 起可用）。第二次仍失败时不再重试，
+    // errno 会原样上报。
+    if (res < 0) {
+        res = syscall(SYS_futex, reinterpret_cast<uint32_t *>(futex),
+                FUTEX_WAKE_BITSET_PRIVATE, static_cast<uint32_t>(count), nullptr,
+                nullptr, mask);
     }
 #endif
-    return expectError(static_cast<int>(res));
+    return expectError(syscallResult(res));
 }
 
 template <class T>
@@ -4630,32 +4653,62 @@ inline Expected<> futex_wait_sync(std::atomic<T> *futex,
             futexValueExtend(val), static_cast<uint64_t>(mask),
             getFutexFlagsFor<T>());
 #if CO_ASYNC_INVALFIX
-    if (res == -EBADF || res == -ENOSYS) {
-        res = syscall(SYS_futex, reinterpret_cast<uint32_t *>(futex), FUTEX_WAIT_BITSET_PRIVATE,
-                static_cast<uint32_t>(futexValueExtend(val)), nullptr, nullptr, mask);
+    if (res < 0) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        ts.tv_nsec += kFutexSyncWaitPoll.count() * 1'000'000;
+        if (ts.tv_nsec >= 1'000'000'000) {
+            ts.tv_nsec -= 1'000'000'000;
+            ++ts.tv_sec;
+        }
+        res = syscall(SYS_futex, reinterpret_cast<uint32_t *>(futex),
+                FUTEX_WAIT_BITSET_PRIVATE,
+                static_cast<uint32_t>(futexValueExtend(val)), &ts, nullptr,
+                mask);
+        if (res < 0 && (errno == ETIMEDOUT || errno == EAGAIN)) {
+            return std::errc::resource_unavailable_try_again;
+        }
     }
 #endif
-    return expectError(static_cast<int>(res));
+    return expectError(syscallResult(res));
 }
 
+
+#if CO_ASYNC_INVALFIX
+// io_uring 的 FUTEX_WAIT/FUTEX_WAKE 操作码要 5.19：更老的内核回 EINVAL，
+// op 压根没提交时 Awaiter 会停在 -ENOSYS（见 UringOp::Awaiter）。两种都
+// 说明异步接口不可用。（-EBADF 是历史写法，一并保留。）
+inline bool futexAsyncUnavailable(int res) {
+    return res == -EINVAL || res == -ENOSYS || res == -EBADF;
+}
+#endif
 
 template <class T>
 inline Task<Expected<>> futex_wait(std::atomic<T> *futex,
                                    std::type_identity_t<T> val,
                                    uint32_t mask = FUTEX_BITSET_MATCH_ANY) {
-    co_return expectError(
-        co_await UringOp()
-            .prep_futex_wait(reinterpret_cast<uint32_t *>(futex),
-                             futexValueExtend(val), static_cast<uint64_t>(mask),
-                             getFutexFlagsFor<T>(), 0)
-            .cancelGuard(co_await co_cancel)).transform([] (int) {})
+    int res = co_await UringOp()
+                  .prep_futex_wait(reinterpret_cast<uint32_t *>(futex),
+                                   futexValueExtend(val),
+                                   static_cast<uint64_t>(mask),
+                                   getFutexFlagsFor<T>(), 0)
+                  .cancelGuard(co_await co_cancel);
 #if CO_ASYNC_INVALFIX
-        .or_else(std::errc::bad_file_descriptor, [&] {
-            return futex_wait_sync(futex, val, mask);
-        })
+    if (futexAsyncUnavailable(res)) {
+        // 同步兜底阻塞的是事件循环线程本身，异步路径那套 cancelGuard 用不上，
+        // 必须自己看取消信号；否则 when_any/co_timeout 取消这次等待时它就再也
+        // 回不去了。单次调用只看一眼即可：调用方（ConditionVariable::wait、
+        // 各队列）都是重检循环，上一个 10ms 轮询结束后会再进来一次。
+        CancelToken cancel = co_await co_cancel;
+        if (cancel.is_canceled()) {
+            co_return std::errc::operation_canceled;
+        }
+        co_return futex_wait_sync(futex, val, mask)
+            .ignore_error(std::errc::resource_unavailable_try_again);
+    }
 #endif
-        .ignore_error(std::errc::resource_unavailable_try_again)
-    ;
+    co_return expectError(res).transform([](int) {}).ignore_error(
+        std::errc::resource_unavailable_try_again);
 }
 
 template <class T>
@@ -4663,19 +4716,18 @@ inline Task<Expected<>>
 futex_notify_async(std::atomic<T> *futex,
                    std::size_t count = kFutexNotifyAll,
                    uint32_t mask = FUTEX_BITSET_MATCH_ANY) {
-    co_return expectError(
-        co_await UringOp()
-            .prep_futex_wake(reinterpret_cast<uint32_t *>(futex),
-                             static_cast<uint64_t>(count),
-                             static_cast<uint64_t>(mask), getFutexFlagsFor<T>(),
-                             0)
-            .cancelGuard(co_await co_cancel)).transform([] (int) {})
+    int res = co_await UringOp()
+                  .prep_futex_wake(reinterpret_cast<uint32_t *>(futex),
+                                   static_cast<uint64_t>(count),
+                                   static_cast<uint64_t>(mask),
+                                   getFutexFlagsFor<T>(), 0)
+                  .cancelGuard(co_await co_cancel);
 #if CO_ASYNC_INVALFIX
-        .or_else(std::errc::bad_file_descriptor, [&] {
-            return futex_notify_sync(futex, count, mask);
-        })
+    if (futexAsyncUnavailable(res)) {
+        co_return futex_notify_sync(futex, count, mask);
+    }
 #endif
-    ;
+    co_return expectError(res).transform([](int) {});
 }
 
 template <class T>
@@ -5204,55 +5256,45 @@ public:
 
 
 namespace co_async {
-
-struct Semaphore {
+struct IOContextMT {
 private:
-    FutexAtomic<std::uint32_t> mCounter;
-    std::uint32_t const mMaxCount;
-
-    static constexpr std::uint32_t kAcquireMask = 1;
-    static constexpr std::uint32_t kReleaseMask = 2;
+    std::unique_ptr<IOContext[]> mWorkers;
+    std::size_t mNumWorkers = 0;
 
 public:
-    explicit Semaphore(std::uint32_t maxCount, std::uint32_t initialCount)
-        : mCounter(initialCount),
-          mMaxCount(maxCount) {}
+    IOContextMT();
+    IOContextMT(IOContext &&) = delete;
+    ~IOContextMT();
 
-    std::uint32_t count() const noexcept {
-        return mCounter.load(std::memory_order_relaxed);
+    static std::size_t get_worker_id(IOContext const &context) noexcept {
+        return static_cast<std::size_t>(&context - instance->mWorkers.get());
     }
 
-    std::uint32_t max_count() const noexcept {
-        return mMaxCount;
+    static std::size_t this_worker_id() noexcept {
+        return get_worker_id(*IOContext::instance);
     }
 
-    Task<Expected<>> acquire() {
-        std::uint32_t count = mCounter.load(std::memory_order_relaxed);
-        do {
-            while (count == 0) {
-                co_await co_await futex_wait(&mCounter, count, kAcquireMask);
-                count = mCounter.load(std::memory_order_relaxed);
-            }
-        } while (mCounter.compare_exchange_weak(count, count - 1,
-                                                std::memory_order_acq_rel,
-                                                std::memory_order_relaxed));
-        futex_notify(&mCounter, 1, kReleaseMask);
-        co_return {};
+    static IOContext &nth_worker(std::size_t index) noexcept {
+        return instance->mWorkers[index];
     }
 
-    Task<Expected<>> release() {
-        std::uint32_t count = mCounter.load(std::memory_order_relaxed);
-        do {
-            while (count == mMaxCount) {
-                co_await co_await futex_wait(&mCounter, count, kReleaseMask);
-                count = mCounter.load(std::memory_order_relaxed);
-            }
-        } while (mCounter.compare_exchange_weak(count, count + 1,
-                                                std::memory_order_acq_rel,
-                                                std::memory_order_relaxed));
-        futex_notify(&mCounter, 1, kAcquireMask);
-        co_return {};
+    static std::size_t num_workers() noexcept {
+        return instance->mNumWorkers;
     }
+
+    static void run(std::size_t numWorkers = 0);
+
+    // static void spawn(std::coroutine_handle<> coroutine,
+    //                   std::size_t index = 0) {
+    //     instance->mWorkers[index].spawn(coroutine);
+    // }
+    //
+    // template <class T, class P>
+    // static T join(Task<T, P> task, std::size_t index = 0) {
+    //     return instance->mWorkers[index].join(std::move(task));
+    // }
+
+    static IOContextMT *instance;
 };
 } // namespace co_async
 
@@ -5543,84 +5585,6 @@ public:
 
 
 
-namespace co_async {
-
-struct ThreadPool {
-private:
-    struct Thread;
-
-    SpinMutex mWorkingMutex;
-    std::list<Thread *> mWorkingThreads;
-    SpinMutex mFreeMutex;
-    std::list<Thread *> mFreeThreads;
-    SpinMutex mThreadsMutex;
-    std::list<Thread> mThreads;
-
-    Thread *submitJob(std::function<void()> func);
-
-public:
-    Task<Expected<>> rawRun(std::function<void()> func) /* MT-safe */;
-    Task<Expected<>> rawRun(std::function<void(std::stop_token)> func,
-                            CancelToken cancel) /* MT-safe */;
-
-    auto run(std::invocable auto func) /* MT-safe */
-        -> Task<Expected<std::invoke_result_t<decltype(func)>>>
-        requires(!std::invocable<decltype(func), std::stop_token>)
-    {
-        std::optional<Avoid<std::invoke_result_t<decltype(func)>>> res;
-        co_await co_await rawRun([&res, func = std::move(func)]() mutable {
-            res = (func(), Void());
-        });
-        if (!res) [[unlikely]] {
-            co_return std::errc::operation_canceled;
-        }
-        co_return std::move(*res);
-    }
-
-    auto run(std::invocable<std::stop_token> auto func,
-             CancelToken cancel) /* MT-safe */
-        -> Task<
-            Expected<std::invoke_result_t<decltype(func), std::stop_token>>> {
-        std::optional<
-            Avoid<std::invoke_result_t<decltype(func), std::stop_token>>>
-            res;
-        auto e = co_await rawRun(
-            [&res, func = std::move(func)](std::stop_token stop) mutable {
-                res = (func(stop), Void());
-            });
-        if (e.has_error()) {
-            co_return CO_ASYNC_ERROR_FORWARD(e);
-        }
-        if (!res) {
-            co_return std::errc::operation_canceled;
-        }
-        co_return std::move(*res);
-    }
-
-    auto run(std::invocable<std::stop_token> auto func) /* MT-safe */
-        -> Task<
-            Expected<std::invoke_result_t<decltype(func), std::stop_token>>> {
-        co_return co_await run(func, co_await co_cancel);
-    }
-
-    std::size_t threads_count() /* MT-safe */;
-    std::size_t working_threads_count() /* MT-safe */;
-
-    ThreadPool();
-    ~ThreadPool();
-    ThreadPool &operator=(ThreadPool &&) = delete;
-};
-
-} // namespace co_async
-
-
-
-
-
-
-
-
-
 
 namespace co_async {
 template <class T>
@@ -5755,45 +5719,55 @@ public:
 
 
 namespace co_async {
-struct IOContextMT {
+
+struct Semaphore {
 private:
-    std::unique_ptr<IOContext[]> mWorkers;
-    std::size_t mNumWorkers = 0;
+    FutexAtomic<std::uint32_t> mCounter;
+    std::uint32_t const mMaxCount;
+
+    static constexpr std::uint32_t kAcquireMask = 1;
+    static constexpr std::uint32_t kReleaseMask = 2;
 
 public:
-    IOContextMT();
-    IOContextMT(IOContext &&) = delete;
-    ~IOContextMT();
+    explicit Semaphore(std::uint32_t maxCount, std::uint32_t initialCount)
+        : mCounter(initialCount),
+          mMaxCount(maxCount) {}
 
-    static std::size_t get_worker_id(IOContext const &context) noexcept {
-        return static_cast<std::size_t>(&context - instance->mWorkers.get());
+    std::uint32_t count() const noexcept {
+        return mCounter.load(std::memory_order_relaxed);
     }
 
-    static std::size_t this_worker_id() noexcept {
-        return get_worker_id(*IOContext::instance);
+    std::uint32_t max_count() const noexcept {
+        return mMaxCount;
     }
 
-    static IOContext &nth_worker(std::size_t index) noexcept {
-        return instance->mWorkers[index];
+    Task<Expected<>> acquire() {
+        std::uint32_t count = mCounter.load(std::memory_order_relaxed);
+        do {
+            while (count == 0) {
+                co_await co_await futex_wait(&mCounter, count, kAcquireMask);
+                count = mCounter.load(std::memory_order_relaxed);
+            }
+        } while (mCounter.compare_exchange_weak(count, count - 1,
+                                                std::memory_order_acq_rel,
+                                                std::memory_order_relaxed));
+        futex_notify(&mCounter, 1, kReleaseMask);
+        co_return {};
     }
 
-    static std::size_t num_workers() noexcept {
-        return instance->mNumWorkers;
+    Task<Expected<>> release() {
+        std::uint32_t count = mCounter.load(std::memory_order_relaxed);
+        do {
+            while (count == mMaxCount) {
+                co_await co_await futex_wait(&mCounter, count, kReleaseMask);
+                count = mCounter.load(std::memory_order_relaxed);
+            }
+        } while (mCounter.compare_exchange_weak(count, count + 1,
+                                                std::memory_order_acq_rel,
+                                                std::memory_order_relaxed));
+        futex_notify(&mCounter, 1, kAcquireMask);
+        co_return {};
     }
-
-    static void run(std::size_t numWorkers = 0);
-
-    // static void spawn(std::coroutine_handle<> coroutine,
-    //                   std::size_t index = 0) {
-    //     instance->mWorkers[index].spawn(coroutine);
-    // }
-    //
-    // template <class T, class P>
-    // static T join(Task<T, P> task, std::size_t index = 0) {
-    //     return instance->mWorkers[index].join(std::move(task));
-    // }
-
-    static IOContextMT *instance;
 };
 } // namespace co_async
 
@@ -5801,64 +5775,2106 @@ public:
 
 
 
+
+
+
+
 namespace co_async {
 
-struct SpinBarrier {
-    explicit SpinBarrier(std::size_t n) noexcept
-        : m_top_waiting(static_cast<std::uint32_t>(n) - 1),
-          m_num_waiting(0),
-          m_sync_flip(0) {}
+struct ThreadPool {
+private:
+    struct Thread;
 
-    bool arrive_and_wait() noexcept {
-        bool old_flip = m_sync_flip.load(std::memory_order_relaxed);
-        if (m_num_waiting.fetch_add(1, std::memory_order_relaxed) ==
-            m_top_waiting) {
-            m_num_waiting.store(0, std::memory_order_relaxed);
-            m_sync_flip.store(!old_flip, std::memory_order_release);
-            return true;
-        } else {
-            while (m_sync_flip.load(std::memory_order_acquire) == old_flip)
-                ;
-#if __cpp_lib_atomic_wait
-            m_sync_flip.wait(old_flip, std::memory_order_acquire);
+    SpinMutex mWorkingMutex;
+    std::list<Thread *> mWorkingThreads;
+    SpinMutex mFreeMutex;
+    std::list<Thread *> mFreeThreads;
+    SpinMutex mThreadsMutex;
+    std::list<Thread> mThreads;
+
+    Thread *submitJob(std::function<void()> func);
+
+public:
+    Task<Expected<>> rawRun(std::function<void()> func) /* MT-safe */;
+    Task<Expected<>> rawRun(std::function<void(std::stop_token)> func,
+                            CancelToken cancel) /* MT-safe */;
+
+    auto run(std::invocable auto func) /* MT-safe */
+        -> Task<Expected<std::invoke_result_t<decltype(func)>>>
+        requires(!std::invocable<decltype(func), std::stop_token>)
+    {
+        std::optional<Avoid<std::invoke_result_t<decltype(func)>>> res;
+        co_await co_await rawRun([&res, func = std::move(func)]() mutable {
+            res = (func(), Void());
+        });
+        if (!res) [[unlikely]] {
+            co_return std::errc::operation_canceled;
+        }
+        co_return std::move(*res);
+    }
+
+    auto run(std::invocable<std::stop_token> auto func,
+             CancelToken cancel) /* MT-safe */
+        -> Task<
+            Expected<std::invoke_result_t<decltype(func), std::stop_token>>> {
+        std::optional<
+            Avoid<std::invoke_result_t<decltype(func), std::stop_token>>>
+            res;
+        auto e = co_await rawRun(
+            [&res, func = std::move(func)](std::stop_token stop) mutable {
+                res = (func(stop), Void());
+            });
+        if (e.has_error()) {
+            co_return CO_ASYNC_ERROR_FORWARD(e);
+        }
+        if (!res) {
+            co_return std::errc::operation_canceled;
+        }
+        co_return std::move(*res);
+    }
+
+    auto run(std::invocable<std::stop_token> auto func) /* MT-safe */
+        -> Task<
+            Expected<std::invoke_result_t<decltype(func), std::stop_token>>> {
+        co_return co_await run(func, co_await co_cancel);
+    }
+
+    std::size_t threads_count() /* MT-safe */;
+    std::size_t working_threads_count() /* MT-safe */;
+
+    ThreadPool();
+    ~ThreadPool();
+    ThreadPool &operator=(ThreadPool &&) = delete;
+};
+
+} // namespace co_async
+
+
+
+
+
+
+#if CO_ASYNC_ALLOC
+struct BytesBuffer {
+private:
+    struct Deleter {
+        std::size_t mSize;
+        std::pmr::memory_resource *mResource;
+
+        void operator()(char *p) noexcept {
+            mResource->deallocate(p, mSize);
+        }
+    };
+
+    std::unique_ptr<char[], Deleter> mData;
+
+public:
+    BytesBuffer() noexcept = default;
+
+    explicit BytesBuffer(std::size_t size,
+                         std::pmr::polymorphic_allocator<> alloc = {})
+        : mData(reinterpret_cast<char *>(alloc.resource()->allocate(size)),
+                Deleter{size, alloc.resource()}) {}
+
+    void allocate(std::size_t size,
+                  std::pmr::polymorphic_allocator<> alloc = {}) {
+        std::pmr::memory_resource *resource = alloc.resource();
+        mData.reset(reinterpret_cast<char *>(resource->allocate(size)));
+        mData.get_deleter() = {size, resource};
+    }
+
+    char *data() const noexcept {
+        return mData.get();
+    }
+
+    std::size_t size() const noexcept {
+        return mData.get_deleter().mSize;
+    }
+
+    explicit operator bool() const noexcept {
+        return (bool)mData;
+    }
+
+    char &operator[](std::size_t index) const noexcept {
+        return mData[index];
+    }
+
+    operator std::span<char>() const noexcept {
+        return {data(), size()};
+    }
+};
+#else
+// struct BytesBuffer {
+// private:
+//     std::unique_ptr<char[]> mData;
+//     std::size_t mSize = 0;
+//
+// public:
+//     BytesBuffer() noexcept = default;
+//
+//     explicit BytesBuffer(std::size_t size) :
+//     mData(std::make_unique<char[]>(size)), mSize(size) {}
+//
+//     void allocate(std::size_t size) {
+//         mData = std::make_unique<char[]>(size);
+//         mSize = size;
+//     }
+//
+//     char *data() const noexcept {
+//         return mData.get();
+//     }
+//
+//     std::size_t size() const noexcept {
+//         return mSize;
+//     }
+//
+//     explicit operator bool() const noexcept {
+//         return static_cast<bool>(mData);
+//     }
+//
+//     char &operator[](std::size_t index) const noexcept {
+//         return mData[index];
+//     }
+//
+//     operator std::span<char>() const noexcept {
+//         return {data(), size()};
+//     }
+// };
+struct BytesBuffer {
+private:
+    char *mData;
+    std::size_t mSize;
+
+# if __unix__
+    void *pageAlignedAlloc(size_t n) {
+        return valloc(n);
+    }
+
+    void pageAlignedFree(void *p, size_t) {
+        free(p);
+    }
+# elif _WIN32
+    __ void *pageAlignedAlloc(size_t n) {
+        return _aligned_malloc(n, 4096);
+    }
+
+    void pageAlignedFree(void *p, size_t) {
+        _aligned_free(p);
+    }
+# else
+    void *pageAlignedAlloc(size_t n) {
+        return malloc(n);
+    }
+
+    void pageAlignedFree(void *p, size_t) {
+        free(p);
+    }
+# endif
+
+public:
+    BytesBuffer() noexcept : mData(nullptr), mSize(0) {}
+
+    explicit BytesBuffer(std::size_t size)
+        : mData(static_cast<char *>(pageAlignedAlloc(size))),
+          mSize(size) {}
+
+    BytesBuffer(BytesBuffer &&that) noexcept
+        : mData(that.mData),
+          mSize(that.mSize) {
+        that.mData = nullptr;
+        that.mSize = 0;
+    }
+
+    BytesBuffer &operator=(BytesBuffer &&that) noexcept {
+        if (this != &that) {
+            pageAlignedFree(mData, mSize);
+            mData = that.mData;
+            mSize = that.mSize;
+            that.mData = nullptr;
+            that.mSize = 0;
+        }
+        return *this;
+    }
+
+    ~BytesBuffer() noexcept {
+        pageAlignedFree(mData, mSize);
+    }
+
+    void allocate(std::size_t size) {
+        mData = static_cast<char *>(pageAlignedAlloc(size));
+        mSize = size;
+    }
+
+    char *data() const noexcept {
+        return mData;
+    }
+
+    std::size_t size() const noexcept {
+        return mSize;
+    }
+
+    explicit operator bool() const noexcept {
+        return static_cast<bool>(mData);
+    }
+
+    char &operator[](std::size_t index) const noexcept {
+        return mData[index];
+    }
+
+    operator std::span<char>() const noexcept {
+        return {data(), size()};
+    }
+};
 #endif
-            return false;
+
+
+
+
+
+
+
+
+namespace co_async {
+inline constexpr std::size_t kStreamBufferSize = 8192;
+
+inline std::error_code eofError() {
+    static struct : public std::error_category {
+        const char *name() const noexcept override {
+            return "eof";
+        }
+        std::string message(int) const override {
+            return "End of file";
+        }
+    } category;
+    return std::error_code(1, category);
+}
+
+struct Stream {
+    virtual void raw_timeout(std::chrono::steady_clock::duration timeout) {}
+
+    virtual Task<Expected<>> raw_seek(std::uint64_t pos) {
+        co_return std::errc::invalid_seek;
+    }
+
+    virtual Task<Expected<>> raw_flush() {
+        co_return {};
+    }
+
+    virtual Task<> raw_close() {
+        co_return;
+    }
+
+    virtual Task<Expected<std::size_t>> raw_read(std::span<char> buffer) {
+        co_return std::errc::not_supported;
+    }
+
+    virtual Task<Expected<std::size_t>>
+    raw_write(std::span<char const> buffer) {
+        co_return std::errc::not_supported;
+    }
+
+    Stream &operator=(Stream &&) = delete;
+    virtual ~Stream() = default;
+};
+
+struct BorrowedStream {
+    BorrowedStream() : mRaw() {}
+
+    explicit BorrowedStream(Stream *raw) : mRaw(raw) {}
+
+    virtual ~BorrowedStream() = default;
+    BorrowedStream(BorrowedStream &&) = default;
+    BorrowedStream &operator=(BorrowedStream &&) = default;
+
+    Task<Expected<char>> getchar() {
+        if (bufempty()) {
+            mInEnd = mInIndex = 0;
+            co_await co_await fillbuf();
+        }
+        char c = mInBuffer[mInIndex];
+        ++mInIndex;
+        co_return c;
+    }
+
+    Task<Expected<>> getline(String &s, char eol) {
+        std::size_t start = mInIndex;
+        while (true) {
+            for (std::size_t i = start; i < mInEnd; ++i) {
+                if (mInBuffer[i] == eol) {
+                    s.append(mInBuffer.data() + start, i - start);
+                    mInIndex = i + 1;
+                    co_return {};
+                }
+            }
+            s.append(mInBuffer.data() + start, mInEnd - start);
+            mInEnd = mInIndex = 0;
+            co_await co_await fillbuf();
+            start = 0;
         }
     }
 
-    bool arrive_and_drop() noexcept {
-        bool old_flip = m_sync_flip.load(std::memory_order_relaxed);
-        if (m_num_waiting.fetch_add(1, std::memory_order_relaxed) ==
-            m_top_waiting) {
-            m_num_waiting.store(0, std::memory_order_relaxed);
-            m_sync_flip.store(!old_flip, std::memory_order_release);
-            return true;
+    Task<Expected<>> dropline(char eol) {
+        std::size_t start = mInIndex;
+        while (true) {
+            for (std::size_t i = start; i < mInEnd; ++i) {
+                if (mInBuffer[i] == eol) {
+                    mInIndex = i + 1;
+                    co_return {};
+                }
+            }
+            mInEnd = mInIndex = 0;
+            co_await co_await fillbuf();
+            start = 0;
+        }
+    }
+
+    Task<Expected<>> getline(String &s, std::string_view eol) {
+    again:
+        co_await co_await getline(s, eol.front());
+        for (std::size_t i = 1; i < eol.size(); ++i) {
+            if (bufempty()) {
+                mInEnd = mInIndex = 0;
+                co_await co_await fillbuf();
+            }
+            char c = mInBuffer[mInIndex];
+            if (eol[i] == c) [[likely]] {
+                ++mInIndex;
+            } else {
+                s.append(eol.data(), i);
+                goto again;
+            }
+        }
+        co_return {};
+    }
+
+    Task<Expected<>> dropline(std::string_view eol) {
+    again:
+        co_await co_await dropline(eol.front());
+        for (std::size_t i = 1; i < eol.size(); ++i) {
+            if (bufempty()) {
+                mInEnd = mInIndex = 0;
+                co_await co_await fillbuf();
+            }
+            char c = mInBuffer[mInIndex];
+            if (eol[i] == c) [[likely]] {
+                ++mInIndex;
+            } else {
+                goto again;
+            }
+        }
+        co_return {};
+    }
+
+    Task<Expected<String>> getline(char eol) {
+        String s;
+        co_await co_await getline(s, eol);
+        co_return s;
+    }
+
+    Task<Expected<String>> getline(std::string_view eol) {
+        String s;
+        co_await co_await getline(s, eol);
+        co_return s;
+    }
+
+    Task<Expected<>> getspan(std::span<char> s) {
+        auto p = s.data();
+        auto n = s.size();
+        std::size_t start = mInIndex;
+        while (true) {
+            auto end = start + n;
+            if (end <= mInEnd) {
+                p = std::copy(mInBuffer.data() + start, mInBuffer.data() + end,
+                              p);
+                mInIndex = end;
+                co_return {};
+            }
+            p = std::copy(mInBuffer.data() + start, mInBuffer.data() + mInEnd,
+                          p);
+            mInEnd = mInIndex = 0;
+            co_await co_await fillbuf();
+            start = 0;
+        }
+    }
+
+    Task<Expected<>> dropn(std::size_t n) {
+        auto start = mInIndex;
+        while (true) {
+            auto end = start + n;
+            if (end <= mInEnd) {
+                mInIndex = end;
+                co_return {};
+            }
+            auto m = mInEnd - mInIndex;
+            n -= m;
+            mInEnd = mInIndex = 0;
+            co_await co_await fillbuf();
+            start = 0;
+        }
+    }
+
+    Task<Expected<>> getn(String &s, std::size_t n) {
+        auto start = mInIndex;
+        while (true) {
+            auto end = start + n;
+            if (end <= mInEnd) {
+                s.append(mInBuffer.data() + mInIndex, n);
+                mInIndex = end;
+                co_return {};
+            }
+            auto m = mInEnd - mInIndex;
+            n -= m;
+            s.append(mInBuffer.data() + mInIndex, m);
+            mInEnd = mInIndex = 0;
+            co_await co_await fillbuf();
+            start = 0;
+        }
+    }
+
+    Task<Expected<String>> getn(std::size_t n) {
+        String s;
+        s.reserve(n);
+        co_await co_await getn(s, n);
+        co_return s;
+    }
+
+    Task<Expected<>> dropall() {
+        do {
+            mInEnd = mInIndex = 0;
+        } while (co_await (co_await fillbuf()).transform([] { return true; }).or_else(eofError(), [] { return false; }));
+        co_return {};
+    }
+
+    Task<Expected<>> getall(String &s) {
+        std::size_t start = mInIndex;
+        do {
+            s.append(mInBuffer.data() + start, mInEnd - start);
+            start = 0;
+            mInEnd = mInIndex = 0;
+        } while (co_await (co_await fillbuf()).transform([] { return true; }).or_else(eofError(), [] { return false; }));
+        co_return {};
+    }
+
+    Task<Expected<String>> getall() {
+        String s;
+        co_await co_await getall(s);
+        co_return s;
+    }
+
+    template <class T>
+        requires std::is_trivial_v<T>
+    Task<Expected<>> getstruct(T &ret) {
+        return getspan(
+            std::span<char>(reinterpret_cast<char *>(&ret), sizeof(T)));
+    }
+
+    template <class T>
+        requires std::is_trivial_v<T>
+    Task<Expected<T>> getstruct() {
+        T ret;
+        co_await co_await getstruct(ret);
+        co_return ret;
+    }
+
+    std::span<char const> peekbuf() const noexcept {
+        return {mInBuffer.data() + mInIndex, mInEnd - mInIndex};
+    }
+
+    void seenbuf(std::size_t n) noexcept {
+        mInIndex += n;
+    }
+
+    Task<Expected<String>> getchunk() noexcept {
+        if (bufempty()) {
+            mInEnd = mInIndex = 0;
+            co_await co_await fillbuf();
+        }
+        auto buf = peekbuf();
+        String ret(buf.data(), buf.size());
+        seenbuf(buf.size());
+        co_return std::move(ret);
+    }
+
+    std::size_t tryread(std::span<char> buffer) {
+        auto peekBuf = peekbuf();
+        std::size_t n = std::min(buffer.size(), peekBuf.size());
+        std::memcpy(buffer.data(), peekBuf.data(), n);
+        seenbuf(n);
+        return n;
+    }
+
+    Task<Expected<char>> peekchar() {
+        if (bufempty()) {
+            mInEnd = mInIndex = 0;
+            co_await co_await fillbuf();
+        }
+        co_return mInBuffer[mInIndex];
+    }
+
+    Task<Expected<>> peekn(String &s, std::size_t n) {
+        if (mInBuffer.size() - mInIndex < n) {
+            if (mInBuffer.size() < n) [[unlikely]] {
+                co_return std::errc::value_too_large;
+            }
+            std::memmove(mInBuffer.data(), mInBuffer.data() + mInIndex,
+                         mInEnd - mInIndex);
+            mInEnd -= mInIndex;
+            mInIndex = 0;
+        }
+        while (mInEnd - mInIndex < n) {
+            co_await co_await fillbuf();
+        }
+        s.append(mInBuffer.data() + mInIndex, n);
+        co_return {};
+    }
+
+    Task<Expected<String>> peekn(std::size_t n) {
+        String s;
+        co_await co_await peekn(s, n);
+        co_return s;
+    }
+
+    void allocinbuf(std::size_t size) {
+        if (!mInBuffer) [[likely]] {
+            mInBuffer.allocate(size);
+            mInIndex = 0;
+            mInEnd = 0;
+        }
+    }
+
+    Task<Expected<>> fillbuf() {
+        if (!mInBuffer) {
+            allocinbuf(kStreamBufferSize);
+        }
+        // #if CO_ASYNC_DEBUG
+        //         if (!bufempty()) [[unlikely]] {
+        //             throw std::logic_error("buf must be empty before
+        //             fillbuf");
+        //         }
+        // #endif
+        auto n = co_await co_await mRaw->raw_read(std::span(
+            mInBuffer.data() + mInIndex, mInBuffer.size() - mInIndex));
+        // auto n = co_await co_await mRaw->raw_read(mInBuffer);
+        if (n == 0) [[unlikely]] {
+            co_return eofError();
+        }
+        mInEnd = mInIndex + n;
+        co_return {};
+    }
+
+    bool bufempty() const noexcept {
+        return mInIndex == mInEnd;
+    }
+
+    Task<Expected<>> putchar(char c) {
+        if (buffull()) {
+            co_await co_await flush();
+        }
+        mOutBuffer[mOutIndex] = c;
+        ++mOutIndex;
+        co_return {};
+    }
+
+    Task<Expected<>> putspan(std::span<char const> s) {
+        auto p = s.data();
+        auto const pe = s.data() + s.size();
+    again:
+        if (std::size_t(pe - p) <= mOutBuffer.size() - mOutIndex) {
+            auto b = mOutBuffer.data() + mOutIndex;
+            mOutIndex += std::size_t(pe - p);
+            while (p < pe) {
+                *b++ = *p++;
+            }
         } else {
-            return false;
+            auto b = mOutBuffer.data() + mOutIndex;
+            auto const be = mOutBuffer.data() + mOutBuffer.size();
+            mOutIndex = mOutBuffer.size();
+            while (b < be) {
+                *b++ = *p++;
+            }
+            co_await co_await flush();
+            mOutIndex = 0;
+            goto again;
+        }
+        co_return {};
+    }
+
+    std::size_t trywrite(std::span<char const> s) {
+        if (!mOutBuffer) {
+            allocoutbuf(kStreamBufferSize);
+        }
+        auto p = s.data();
+        auto const pe = s.data() + s.size();
+        auto nMax = mOutBuffer.size() - mOutIndex;
+        auto n = std::size_t(pe - p);
+        if (n <= nMax) {
+            auto b = mOutBuffer.data() + mOutIndex;
+            mOutIndex += std::size_t(pe - p);
+            while (p < pe) {
+                *b++ = *p++;
+            }
+            return n;
+        } else {
+            auto b = mOutBuffer.data() + mOutIndex;
+            auto const be = mOutBuffer.data() + mOutBuffer.size();
+            mOutIndex = mOutBuffer.size();
+            while (b < be) {
+                *b++ = *p++;
+            }
+            return nMax;
+        }
+    }
+
+    Task<Expected<>> puts(std::string_view s) {
+        return putspan(std::span<char const>(s.data(), s.size()));
+    }
+
+    template <class T>
+    Task<Expected<>> putstruct(T const &s) {
+        return putspan(std::span<char const>(
+            reinterpret_cast<char const *>(std::addressof(s)), sizeof(T)));
+    }
+
+    Task<Expected<>> putchunk(std::string_view s) {
+        co_await co_await puts(s);
+        co_return co_await flush();
+    }
+
+    Task<Expected<>> putline(std::string_view s) {
+        co_await co_await puts(s);
+        co_await co_await putchar('\n');
+        co_return co_await flush();
+    }
+
+    void allocoutbuf(std::size_t size) {
+        if (!mOutBuffer) [[likely]] {
+            mOutBuffer.allocate(size);
+            mOutIndex = 0;
+        }
+    }
+
+    Task<Expected<>> flush() {
+        if (!mOutBuffer) {
+            allocoutbuf(kStreamBufferSize);
+            co_return {};
+        }
+        if (mOutIndex) [[likely]] {
+            auto buf = std::span(mOutBuffer.data(), mOutIndex);
+            auto len = co_await mRaw->raw_write(buf);
+            while (len.has_value() && *len > 0 && *len != buf.size()) {
+                buf = buf.subspan(*len);
+                len = co_await mRaw->raw_write(buf);
+            }
+            if (len.has_error()) [[unlikely]] {
+#if CO_ASYNC_DEBUG
+                co_return {len.error(), len.mErrorLocation};
+#else
+                co_return len.error();
+#endif
+            }
+            if (*len == 0) [[unlikely]] {
+                co_return eofError();
+            }
+            mOutIndex = 0;
+            co_await co_await mRaw->raw_flush();
+        }
+        co_return {};
+    }
+
+    bool buffull() const noexcept {
+        return mOutIndex == mOutBuffer.size();
+    }
+
+    Stream &raw() const noexcept {
+        return *mRaw;
+    }
+
+    template <std::derived_from<Stream> Derived>
+    Derived &raw() const {
+        return dynamic_cast<Derived &>(*mRaw);
+    }
+
+    Task<> close() {
+#if CO_ASYNC_DEBUG
+        if (mOutIndex) [[unlikely]] {
+            std::cerr << "WARNING: stream closed with buffer not flushed\n";
+        }
+#endif
+        return mRaw->raw_close();
+    }
+
+    Task<Expected<std::size_t>> read(std::span<char> buffer) {
+        if (!bufempty()) {
+            auto n = std::min(mInEnd - mInIndex, buffer.size());
+            std::memcpy(buffer.data(), mInBuffer.data() + mInIndex, n);
+            mInIndex += n;
+            co_return n;
+        }
+        co_return co_await mRaw->raw_read(buffer);
+    }
+
+    Task<Expected<std::size_t>> read(void *buffer, std::size_t len) {
+        return read(std::span<char>(static_cast<char *>(buffer), len));
+    }
+
+    std::size_t tryread(void *buffer, std::size_t len) {
+        return tryread(std::span<char>(static_cast<char *>(buffer), len));
+    }
+
+    Task<Expected<std::size_t>> write(std::span<char const> buffer) {
+        if (!buffull()) {
+            auto n = std::min(mInBuffer.size() - mInIndex, buffer.size());
+            co_await co_await putspan(buffer.subspan(0, n));
+            co_return n;
+        }
+        co_return co_await mRaw->raw_write(buffer);
+    }
+
+    Task<Expected<std::size_t>> write(void const *buffer, std::size_t len) {
+        return write(
+            std::span<char const>(static_cast<char const *>(buffer), len));
+    }
+
+    Task<Expected<>> putspan(void const *buffer, std::size_t len) {
+        return putspan(
+            std::span<char const>(static_cast<char const *>(buffer), len));
+    }
+
+    std::size_t trywrite(void const *buffer, std::size_t len) {
+        return trywrite(
+            std::span<char const>(static_cast<char const *>(buffer), len));
+    }
+
+    void timeout(std::chrono::steady_clock::duration timeout) {
+        mRaw->raw_timeout(timeout);
+    }
+
+    Task<Expected<>> seek(std::uint64_t pos) {
+        co_await co_await mRaw->raw_seek(pos);
+        mInIndex = 0;
+        mInEnd = 0;
+        mOutIndex = 0;
+        co_return {};
+    }
+
+private:
+    BytesBuffer mInBuffer;
+    std::size_t mInIndex = 0;
+    std::size_t mInEnd = 0;
+    BytesBuffer mOutBuffer;
+    std::size_t mOutIndex = 0;
+    Stream *mRaw;
+};
+
+struct OwningStream : BorrowedStream {
+    explicit OwningStream() : BorrowedStream(), mRawUnique() {}
+
+    explicit OwningStream(std::unique_ptr<Stream> raw)
+        : BorrowedStream(raw.get()),
+          mRawUnique(std::move(raw)) {}
+
+    std::unique_ptr<Stream> releaseraw() noexcept {
+        return std::move(mRawUnique);
+    }
+
+private:
+    std::unique_ptr<Stream> mRawUnique;
+};
+
+template <std::derived_from<Stream> Stream, class... Args>
+OwningStream make_stream(Args &&...args) {
+    return OwningStream(std::make_unique<Stream>(std::forward<Args>(args)...));
+}
+} // namespace co_async
+
+
+
+
+
+
+namespace co_async {
+struct CachedStream : Stream {
+    explicit CachedStream(BorrowedStream &stream) : mStream(stream) {}
+
+    BorrowedStream &base() const noexcept {
+        return mStream;
+    }
+
+    Task<Expected<std::size_t>> raw_read(std::span<char> buffer) override {
+        if (mPos != mCache.size()) {
+            auto n = std::min(mCache.size() - mPos, buffer.size());
+            std::memcpy(buffer.data(), mCache.data() + mPos, n);
+            mPos += n;
+            co_return n;
+        }
+        auto n = co_await co_await mStream.read(buffer);
+        mCache.append(buffer.data(), n);
+        co_return n;
+    }
+
+    void raw_timeout(std::chrono::steady_clock::duration timeout) override {
+        mStream.timeout(timeout);
+    }
+
+    Task<> raw_close() override {
+        return mStream.close();
+    }
+
+    Task<Expected<>> raw_flush() override {
+        return mStream.flush();
+    }
+
+    Task<Expected<>> raw_seek(std::uint64_t pos) override {
+        if (pos <= mCache.size()) {
+            mPos = pos;
+            co_return {};
+        } else {
+            co_return std::errc::invalid_seek;
         }
     }
 
 private:
-    std::uint32_t const m_top_waiting;
-    FutexAtomic<std::uint32_t> m_num_waiting;
-    FutexAtomic<bool> m_sync_flip;
+    BorrowedStream &mStream;
+    std::string mCache;
+    std::size_t mPos = 0;
+};
+} // namespace co_async
+
+
+
+
+
+
+#include <dirent.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+namespace co_async {
+struct [[nodiscard]] FileHandle {
+    FileHandle() noexcept : mFileNo(-1) {}
+
+    explicit FileHandle(int fileNo) noexcept : mFileNo(fileNo) {}
+
+    int fileNo() const noexcept {
+        return mFileNo;
+    }
+
+    int releaseFile() noexcept {
+        int ret = mFileNo;
+        mFileNo = -1;
+        return ret;
+    }
+
+    explicit operator bool() noexcept {
+        return mFileNo != -1;
+    }
+
+    FileHandle(FileHandle &&that) noexcept : mFileNo(that.releaseFile()) {}
+
+    FileHandle &operator=(FileHandle &&that) noexcept {
+        std::swap(mFileNo, that.mFileNo);
+        return *this;
+    }
+
+    ~FileHandle() {
+        if (mFileNo != -1) {
+            close(mFileNo);
+        }
+    }
+
+protected:
+    int mFileNo;
 };
 
+struct FileStat {
+    struct statx *getNativeStatx() {
+        return &mStatx;
+    }
+
+    std::uint64_t size() const noexcept {
+        return mStatx.stx_size;
+    }
+
+    std::uint64_t num_blocks() const noexcept {
+        return mStatx.stx_blocks;
+    }
+
+    mode_t mode() const noexcept {
+        return mStatx.stx_mode;
+    }
+
+    unsigned int uid() const noexcept {
+        return mStatx.stx_uid;
+    }
+
+    unsigned int gid() const noexcept {
+        return mStatx.stx_gid;
+    }
+
+    bool is_directory() const noexcept {
+        return (mStatx.stx_mode & S_IFDIR) != 0;
+    }
+
+    bool is_regular_file() const noexcept {
+        return (mStatx.stx_mode & S_IFREG) != 0;
+    }
+
+    bool is_symlink() const noexcept {
+        return (mStatx.stx_mode & S_IFLNK) != 0;
+    }
+
+    bool is_readable() const noexcept {
+        return (mStatx.stx_mode & S_IRUSR) != 0;
+    }
+
+    bool is_writable() const noexcept {
+        return (mStatx.stx_mode & S_IWUSR) != 0;
+    }
+
+    bool is_executable() const noexcept {
+        return (mStatx.stx_mode & S_IXUSR) != 0;
+    }
+
+    std::chrono::system_clock::time_point accessed_time() const {
+        return statTimestampToTimePoint(mStatx.stx_atime);
+    }
+
+    std::chrono::system_clock::time_point attribute_changed_time() const {
+        return statTimestampToTimePoint(mStatx.stx_ctime);
+    }
+
+    std::chrono::system_clock::time_point created_time() const {
+        return statTimestampToTimePoint(mStatx.stx_btime);
+    }
+
+    std::chrono::system_clock::time_point modified_time() const {
+        return statTimestampToTimePoint(mStatx.stx_mtime);
+    }
+
+private:
+    struct statx mStatx;
+
+    static std::chrono::system_clock::time_point
+    statTimestampToTimePoint(struct statx_timestamp const &time) {
+        return std::chrono::system_clock::time_point(
+            std::chrono::seconds(time.tv_sec) +
+            std::chrono::nanoseconds(time.tv_nsec));
+    }
+};
+
+#if CO_ASYNC_DIRECT
+static constexpr size_t kOpenModeDefaultFlags =
+    O_LARGEFILE | O_CLOEXEC | O_DIRECT;
+#else
+static constexpr size_t kOpenModeDefaultFlags = O_LARGEFILE | O_CLOEXEC;
+#endif
+
+enum class OpenMode : int {
+    Read = O_RDONLY | kOpenModeDefaultFlags,
+    Write = O_WRONLY | O_TRUNC | O_CREAT | kOpenModeDefaultFlags,
+    ReadWrite = O_RDWR | O_CREAT | kOpenModeDefaultFlags,
+    Append = O_WRONLY | O_APPEND | O_CREAT | kOpenModeDefaultFlags,
+    Directory = O_RDONLY | O_DIRECTORY | kOpenModeDefaultFlags,
+};
+
+inline std::filesystem::path make_path(std::string_view path) {
+    return std::filesystem::path(
+        reinterpret_cast<char8_t const *>(std::string(path).c_str()));
+}
+
+template <std::convertible_to<std::string_view>... Ts>
+    requires(sizeof...(Ts) >= 2)
+inline std::filesystem::path make_path(Ts &&...chunks) {
+    return (make_path(chunks) / ...);
+}
+
+inline Task<Expected<FileHandle>> fs_open(std::filesystem::path path, OpenMode mode,
+                                          mode_t access = 0644) {
+    int oflags = static_cast<int>(mode);
+    int fd = co_await expectError(co_await UringOp().prep_openat(
+        AT_FDCWD, path.c_str(), oflags, access))
+#if CO_ASYNC_INVALFIX
+        .or_else(std::errc::bad_file_descriptor, [&] { return expectError(open(path.c_str(), oflags, access)); })
+#endif
+        ;
+    FileHandle file(fd);
+    co_return file;
+}
+
+inline Task<Expected<FileHandle>> fs_openat(FileHandle dir,
+                                            std::filesystem::path path,
+                                            OpenMode mode,
+                                            mode_t access = 0644) {
+    int oflags = static_cast<int>(mode);
+    int fd = co_await expectError(co_await UringOp().prep_openat(
+        dir.fileNo(), path.c_str(), oflags, access))
+#if CO_ASYNC_INVALFIX
+        .or_else(std::errc::bad_file_descriptor, [&] { return expectError(openat(dir.fileNo(), path.c_str(), oflags, access)); })
+#endif
+        ;
+    FileHandle file(fd);
+    co_return file;
+}
+
+inline Task<Expected<>> fs_close(FileHandle file) {
+    co_await expectError(co_await UringOp().prep_close(file.fileNo()));
+    file.releaseFile();
+    co_return {};
+}
+
+inline Task<Expected<>> fs_mkdir(std::filesystem::path path, mode_t access = 0755) {
+    co_await expectError(
+        co_await UringOp().prep_mkdirat(AT_FDCWD, path.c_str(), access));
+    co_return {};
+}
+
+inline Task<Expected<>> fs_link(std::filesystem::path oldpath, std::filesystem::path newpath) {
+    co_await expectError(
+        co_await UringOp().prep_linkat(AT_FDCWD, oldpath.c_str(),
+                                       AT_FDCWD, newpath.c_str(), 0));
+    co_return {};
+}
+
+inline Task<Expected<>> fs_symlink(std::filesystem::path target, std::filesystem::path linkpath) {
+    co_await expectError(co_await UringOp().prep_symlinkat(
+        target.c_str(), AT_FDCWD, linkpath.c_str()));
+    co_return {};
+}
+
+inline Task<Expected<>> fs_unlink(std::filesystem::path path) {
+    co_await expectError(
+        co_await UringOp().prep_unlinkat(AT_FDCWD, path.c_str(), 0));
+    co_return {};
+}
+
+inline Task<Expected<>> fs_rmdir(std::filesystem::path path) {
+    co_await expectError(co_await UringOp().prep_unlinkat(
+        AT_FDCWD, path.c_str(), AT_REMOVEDIR));
+    co_return {};
+}
+
+inline Task<Expected<FileStat>>
+fs_stat(std::filesystem::path path, unsigned int mask = STATX_BASIC_STATS | STATX_BTIME, int flags = 0) {
+    FileStat ret;
+    co_await expectError(co_await UringOp().prep_statx(
+        AT_FDCWD, path.c_str(), flags, mask, ret.getNativeStatx()))
+#if CO_ASYNC_INVALFIX
+            .or_else(std::errc::bad_file_descriptor, [&] { return expectError(statx(AT_FDCWD, path.c_str(), flags, mask, ret.getNativeStatx())); })
+#endif
+            ;
+    co_return ret;
+}
+
+inline Task<Expected<std::size_t>>
+fs_read(FileHandle &file, std::span<char> buffer,
+        std::uint64_t offset = static_cast<std::uint64_t>(-1)) {
+    co_return static_cast<std::size_t>(
+        co_await expectError(
+            co_await UringOp().prep_read(file.fileNo(), buffer, offset))
+#if CO_ASYNC_INVALFIX
+            .or_else(std::errc::invalid_argument,
+                      [&] {
+                          if (offset == static_cast<std::uint64_t>(-1)) {
+                              return expectError(static_cast<int>(read(
+                                  file.fileNo(), buffer.data(), buffer.size())));
+                          } else {
+                              return expectError(static_cast<int>(pread64(
+                                  file.fileNo(), buffer.data(), buffer.size(),
+                                  static_cast<__off64_t>(offset))));
+                          }
+                      })
+#endif
+    );
+}
+
+inline Task<Expected<std::size_t>>
+fs_write(FileHandle &file, std::span<char const> buffer,
+         std::uint64_t offset = static_cast<std::uint64_t>(-1)) {
+    co_return static_cast<std::size_t>(
+        co_await expectError(
+            co_await UringOp().prep_write(file.fileNo(), buffer, offset))
+#if CO_ASYNC_INVALFIX
+            .or_else(std::errc::invalid_argument,
+                      [&] {
+                          if (offset == static_cast<std::uint64_t>(-1)) {
+                              return expectError(static_cast<int>(write(
+                                  file.fileNo(), buffer.data(), buffer.size())));
+                          } else {
+                              return expectError(static_cast<int>(pwrite64(
+                                  file.fileNo(), buffer.data(), buffer.size(),
+                                  static_cast<__off64_t>(offset))));
+                          }
+                      })
+#endif
+    );
+}
+
+inline Task<Expected<std::size_t>>
+fs_read(FileHandle &file, std::span<char> buffer, CancelToken cancel,
+        std::uint64_t offset = static_cast<std::uint64_t>(-1)) {
+    co_return static_cast<std::size_t>(
+        co_await expectError(co_await UringOp()
+                                 .prep_read(file.fileNo(), buffer, offset)
+                                 .cancelGuard(cancel))
+#if CO_ASYNC_INVALFIX
+            .or_else(std::errc::invalid_argument,
+                      [&] {
+                          if (offset == static_cast<std::uint64_t>(-1)) {
+                              return expectError(static_cast<int>(read(
+                                  file.fileNo(), buffer.data(), buffer.size())));
+                          } else {
+                              return expectError(static_cast<int>(pread64(
+                                  file.fileNo(), buffer.data(), buffer.size(),
+                                  static_cast<__off64_t>(offset))));
+                          }
+                      })
+#endif
+    );
+}
+
+inline Task<Expected<std::size_t>>
+fs_write(FileHandle &file, std::span<char const> buffer, CancelToken cancel,
+         std::uint64_t offset = static_cast<std::uint64_t>(-1)) {
+    co_return static_cast<std::size_t>(
+        co_await expectError(co_await UringOp()
+                                 .prep_write(file.fileNo(), buffer, offset)
+                                 .cancelGuard(cancel))
+#if CO_ASYNC_INVALFIX
+            .or_else(std::errc::invalid_argument,
+                      [&] {
+                          if (offset == static_cast<std::uint64_t>(-1)) {
+                              return expectError(static_cast<int>(write(
+                                  file.fileNo(), buffer.data(), buffer.size())));
+                          } else {
+                              return expectError(static_cast<int>(pwrite64(
+                                  file.fileNo(), buffer.data(), buffer.size(),
+                                  static_cast<__off64_t>(offset))));
+                          }
+                      })
+#endif
+    );
+}
+
+inline Task<Expected<>> fs_truncate(FileHandle &file, std::uint64_t size = 0) {
+    co_await expectError(co_await UringOp().prep_ftruncate(
+        file.fileNo(), static_cast<loff_t>(size)));
+    co_return {};
+}
+
+inline Task<Expected<std::size_t>>
+fs_splice(FileHandle &fileIn, FileHandle &fileOut, std::size_t size,
+          std::int64_t offsetIn = -1, std::int64_t offsetOut = -1) {
+    co_return static_cast<std::size_t>(
+        co_await expectError(co_await UringOp().prep_splice(
+            fileIn.fileNo(), offsetIn, fileOut.fileNo(), offsetOut, size, 0)));
+}
+
+inline Task<Expected<std::size_t>> fs_getdents(FileHandle &dirFile,
+                                               std::span<char> buffer) {
+    int res = static_cast<int>(
+        getdents64(dirFile.fileNo(), buffer.data(), buffer.size()));
+    if (res < 0) [[unlikely]] {
+        res = -errno;
+    }
+    co_return static_cast<std::size_t>(co_await expectError(res));
+}
+
+inline Task<int> fs_nop() {
+    co_return co_await UringOp().prep_nop();
+}
+
+inline Task<Expected<>> fs_cancel_fd(FileHandle &file) {
+    co_await expectError(co_await UringOp().prep_cancel_fd(
+        file.fileNo(), IORING_ASYNC_CANCEL_FD | IORING_ASYNC_CANCEL_ALL));
+    co_return {};
+}
 } // namespace co_async
+
+
+
+
+
+
+
+#include <dirent.h>
+
+namespace co_async {
+struct DirectoryWalker {
+    explicit DirectoryWalker(FileHandle file);
+    DirectoryWalker(DirectoryWalker &&) = default;
+    DirectoryWalker &operator=(DirectoryWalker &&) = default;
+    ~DirectoryWalker();
+    Task<Expected<String>> next();
+
+private:
+    OwningStream mStream;
+};
+
+Task<Expected<DirectoryWalker>> dir_open(std::filesystem::path path);
+} // namespace co_async
+
+
+
+
+
+
+
+
+namespace co_async {
+Task<Expected<OwningStream>> file_open(std::filesystem::path path,
+                                       OpenMode mode);
+OwningStream file_from_handle(FileHandle handle);
+Task<Expected<String>> file_read(std::filesystem::path path);
+Task<Expected<>> file_write(std::filesystem::path path,
+                            std::string_view content);
+Task<Expected<>> file_append(std::filesystem::path path,
+                             std::string_view content);
+} // namespace co_async
+
+
+
 
 
 
 namespace co_async {
 
-template <class ...Fs>
-struct overloaded : Fs... {
-    using Fs::operator()...;
+std::array<OwningStream, 2> pipe_stream();
+Task<Expected<>> pipe_forward(BorrowedStream &in, BorrowedStream &out);
+
+template <class Func, class... Args>
+    requires std::invocable<Func, Args..., OwningStream &>
+inline Task<Expected<>> pipe_bind(OwningStream w, Func &&func, Args &&...args) {
+    return co_bind(
+        [func = std::forward<decltype(func)>(func),
+         w = std::move(w)](auto &&...args) mutable -> Task<Expected<>> {
+            auto e1 =
+                co_await std::invoke(std::forward<decltype(func)>(func),
+                                     std::forward<decltype(args)>(args)..., w);
+            auto e2 = co_await w.flush();
+            co_await w.close();
+            co_await e1;
+            co_await e2;
+            co_return {};
+        },
+        std::forward<decltype(args)>(args)...);
+}
+} // namespace co_async
+
+
+
+
+
+namespace co_async {
+
+template <class F>
+struct Finally {
+private:
+    F func;
+    bool enable;
+
+public:
+    Finally(std::nullptr_t = nullptr) : enable(false) {}
+
+    Finally(std::convertible_to<F> auto &&func)
+        : func(std::forward<decltype(func)>(func)),
+          enable(true) {}
+
+    Finally(Finally &&that) : func(std::move(that.func)), enable(that.enable) {
+        that.enable = false;
+    }
+
+    Finally &operator=(Finally &&that) {
+        if (this != &that) {
+            if (enable) {
+                func();
+            }
+            func = std::move(that.func);
+            enable = that.enable;
+            that.enable = false;
+        }
+        return *this;
+    }
+
+    void reset() {
+        if (enable) {
+            func();
+        }
+        enable = false;
+    }
+
+    void release() {
+        enable = false;
+    }
+
+    ~Finally() {
+        if (enable) {
+            func();
+        }
+    }
 };
 
-template <class ...Fs>
-overloaded(Fs...) -> overloaded<Fs...>;
+template <class F>
+Finally(F &&) -> Finally<std::decay_t<F>>;
 
+} // namespace co_async
+
+
+
+
+
+namespace co_async {
+template <class T>
+struct from_string_t;
+
+template <class Traits, class Alloc>
+struct from_string_t<std::basic_string<char, Traits, Alloc>> {
+    std::basic_string<char, Traits, Alloc>
+    operator()(std::string_view s) const {
+        return std::basic_string<char, Traits, Alloc>(s);
+    }
+};
+
+template <>
+struct from_string_t<std::string_view> {
+    std::string_view operator()(std::string_view s) const {
+        return s;
+    }
+};
+
+template <std::integral T>
+struct from_string_t<T> {
+    std::optional<T> operator()(std::string_view s, int base = 10) const {
+        T result;
+        auto [p, ec] =
+            std::from_chars(s.data(), s.data() + s.size(), result, base);
+        if (ec != std::errc()) [[unlikely]] {
+            return std::nullopt;
+        }
+        if (p != s.data() + s.size()) [[unlikely]] {
+            return std::nullopt;
+        }
+        return result;
+    }
+};
+
+template <std::floating_point T>
+struct from_string_t<T> {
+    std::optional<T>
+    operator()(std::string_view s,
+               std::chars_format fmt = std::chars_format::general) const {
+        T result;
+        auto [p, ec] =
+            std::from_chars(s.data(), s.data() + s.size(), result, fmt);
+        if (ec != std::errc()) [[unlikely]] {
+            return std::nullopt;
+        }
+        if (p != s.data() + s.size()) [[unlikely]] {
+            return std::nullopt;
+        }
+        return result;
+    }
+};
+template <class T>
+inline constexpr from_string_t<T> from_string;
+template <class T = void>
+struct to_string_t;
+
+template <>
+struct to_string_t<void> {
+    template <class U>
+    void operator()(String &result, U &&value) const {
+        to_string_t<std::decay_t<U>>()(result, std::forward<U>(value));
+    }
+
+    template <class U>
+    String operator()(U &&value) const {
+        String result;
+        operator()(result, std::forward<U>(value));
+        return result;
+    }
+};
+
+template <>
+struct to_string_t<String> {
+    template <class Traits, class Alloc>
+    void operator()(String &result,
+                    std::basic_string<char, Traits, Alloc> const &value) const {
+        result.assign(value);
+    }
+};
+
+template <>
+struct to_string_t<std::string_view> {
+    void operator()(String &result, std::string_view value) const {
+        result.assign(value);
+    }
+};
+
+template <std::integral T>
+struct to_string_t<T> {
+    void operator()(String &result, T value) const {
+        result.resize(std::numeric_limits<T>::digits10 + 2, '\0');
+        auto [p, ec] =
+            std::to_chars(result.data(), result.data() + result.size(), value);
+        if (ec != std::errc()) [[unlikely]] {
+            throw std::system_error(std::make_error_code(ec), "to_chars");
+        }
+        result.resize(std::size_t(p - result.data()));
+    }
+};
+
+template <std::floating_point T>
+struct to_string_t<T> {
+    void operator()(String &result, T value) const {
+        result.resize(std::numeric_limits<T>::max_digits10 + 2, '\0');
+        auto [p, ec] =
+            std::to_chars(result.data(), result.data() + result.size(), value);
+        if (ec != std::errc()) [[unlikely]] {
+            throw std::system_error(std::make_error_code(ec), "to_chars");
+        }
+        result.resize(p - result.data());
+    }
+};
+
+inline constexpr to_string_t<> to_string;
+
+inline String lower_string(std::string_view s) {
+    String ret;
+    ret.resize(s.size());
+    std::transform(s.begin(), s.end(), ret.begin(), [](char c) {
+        if (c >= 'A' && c <= 'Z') {
+            c += 'a' - 'A';
+        }
+        return c;
+    });
+    return ret;
 }
+
+inline String upper_string(std::string_view s) {
+    String ret;
+    ret.resize(s.size());
+    std::transform(s.begin(), s.end(), ret.begin(), [](char c) {
+        if (c >= 'a' && c <= 'z') {
+            c -= 'a' - 'A';
+        }
+        return c;
+    });
+    return ret;
+}
+
+inline String trim_string(std::string_view s,
+                          std::string_view trims = {" \t\r\n", 4}) {
+    auto pos = s.find_first_not_of(trims);
+    if (pos == std::string_view::npos) {
+        return {};
+    }
+    auto end = s.find_last_not_of(trims);
+    return String(s.substr(pos, end - pos + 1));
+}
+
+template <class Delim>
+struct SplitString {
+    SplitString(std::string_view s, Delim delimiter)
+        : s(s),
+          delimiter(delimiter) {}
+
+    struct sentinel {
+        explicit sentinel() = default;
+    };
+
+    struct iterator {
+        explicit iterator(std::string_view s, Delim delimiter) noexcept
+            : s(s),
+              delimiter(delimiter),
+              ended(false),
+              toBeEnded(false) {
+            find_next();
+        }
+
+        std::string_view operator*() const noexcept {
+            return current;
+        }
+
+        std::string_view rest() const noexcept {
+            return std::string_view{current.data(), current.size() + s.size()};
+        }
+
+        iterator &operator++() {
+            find_next();
+            return *this;
+        }
+
+        bool operator!=(sentinel) const noexcept {
+            return !ended;
+        }
+
+        bool operator==(sentinel) const noexcept {
+            return ended;
+        }
+
+        friend bool operator==(sentinel const &lhs,
+                               iterator const &rhs) noexcept {
+            return rhs == lhs;
+        }
+
+        friend bool operator!=(sentinel const &lhs,
+                               iterator const &rhs) noexcept {
+            return rhs != lhs;
+        }
+
+    private:
+        void find_next() {
+            auto pos = s.find(delimiter);
+            if (pos == std::string_view::npos) {
+                current = s;
+                s = {};
+                ended = toBeEnded;
+                toBeEnded = true;
+            } else {
+                current = s.substr(0, pos);
+                if constexpr (std::is_same_v<Delim, std::string_view>) {
+                    s = s.substr(pos + delimiter.size());
+                } else if constexpr (std::is_same_v<Delim, char>) {
+                    s = s.substr(pos + 1);
+                } else {
+                    static_assert(!std::is_void_v<std::void_t<Delim>>);
+                }
+            }
+        }
+
+        std::string_view s;
+        Delim delimiter;
+        std::string_view current;
+        bool ended;
+        bool toBeEnded;
+    };
+
+    iterator begin() const noexcept {
+        return iterator(s, delimiter);
+    }
+
+    sentinel end() const noexcept {
+        return sentinel();
+    }
+
+    std::vector<String> collect() const {
+        std::vector<String> result;
+        for (auto &&part: *this) {
+            result.emplace_back(part);
+        }
+        return result;
+    }
+
+    template <std::size_t N>
+        requires(N > 0)
+    std::array<String, N> collect() const {
+        std::array<String, N> result;
+        std::size_t i = 0;
+        for (auto it = begin(); it != end(); ++it, ++i) {
+            if (i + 1 >= N) {
+                result[i] = String(it.rest());
+                break;
+            }
+            result[i] = String(*it);
+        }
+        return result;
+    }
+
+private:
+    std::string_view s;
+    Delim delimiter;
+};
+
+inline SplitString<std::string_view> split_string(std::string_view s,
+                                                  std::string_view delimiter) {
+    return {s, delimiter};
+}
+
+inline SplitString<char> split_string(std::string_view s, char delimiter) {
+    return {s, delimiter};
+}
+} // namespace co_async
+
+
+
+#include <arpa/inet.h>
+
+
+
+
+
+
+
+#include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/un.h>
+#include <unistd.h>
+
+namespace co_async {
+std::error_category const &getAddrInfoCategory();
+
+// struct IpAddress {
+//     explicit IpAddress(struct in_addr const &addr) noexcept : mAddr(addr) {}
+//
+//     explicit IpAddress(struct in6_addr const &addr6) noexcept : mAddr(addr6)
+//     {}
+//
+//     static Expected<IpAddress> fromString(char const *host);
+//
+//     String toString() const;
+//
+//     auto repr() const {
+//         return toString();
+//     }
+//
+//     std::variant<struct in_addr, struct in6_addr> mAddr;
+// };
+
+struct SocketAddress {
+    SocketAddress() = default;
+
+    explicit SocketAddress(struct sockaddr const *addr, socklen_t addrLen,
+                           sa_family_t family, int sockType, int protocol);
+
+    struct sockaddr_storage mAddr;
+    socklen_t mAddrLen;
+    int mSockType;
+    int mProtocol;
+
+    sa_family_t family() const noexcept {
+        return mAddr.ss_family;
+    }
+
+    int socktype() const noexcept {
+        return mSockType;
+    }
+
+    int protocol() const noexcept {
+        return mProtocol;
+    }
+
+    std::string host() const;
+
+    int port() const;
+
+    void trySetPort(int port);
+
+    String toString() const;
+
+    auto repr() const {
+        return toString();
+    }
+
+private:
+    void initFromHostPort(struct in_addr const &host, int port);
+    void initFromHostPort(struct in6_addr const &host, int port);
+};
+
+struct AddressResolver {
+private:
+    std::string m_host;
+    int m_port = -1;
+    std::string m_service;
+    struct addrinfo m_hints = {};
+
+public:
+    AddressResolver &host(std::string_view host) {
+        if (auto i = host.find("://"); i != host.npos) {
+            if (auto service = host.substr(0, i); !service.empty()) {
+                m_service = service;
+            }
+            host.remove_prefix(i + 3);
+        }
+        if (auto i = host.rfind(':'); i != host.npos) {
+            if (auto portOpt = from_string<int>(host.substr(i + 1)))
+                [[likely]] {
+                m_port = *portOpt;
+                host.remove_suffix(host.size() - i);
+            }
+        }
+        m_host = host;
+        return *this;
+    }
+
+    AddressResolver &port(int port) {
+        m_port = port;
+        return *this;
+    }
+
+    AddressResolver &service(std::string_view service) {
+        m_service = service;
+        return *this;
+    }
+
+    AddressResolver &family(int family) {
+        m_hints.ai_family = family;
+        return *this;
+    }
+
+    AddressResolver &socktype(int socktype) {
+        m_hints.ai_socktype = socktype;
+        return *this;
+    }
+
+    struct ResolveResult {
+        std::vector<SocketAddress> addrs;
+        std::string service;
+    };
+
+    Expected<ResolveResult> resolve_all();
+    Expected<SocketAddress> resolve_one();
+    Expected<SocketAddress> resolve_one(std::string &service);
+};
+
+struct [[nodiscard]] SocketHandle : FileHandle {
+    using FileHandle::FileHandle;
+};
+
+struct [[nodiscard]] SocketListener : SocketHandle {
+    using SocketHandle::SocketHandle;
+};
+
+SocketAddress get_socket_address(SocketHandle &sock);
+SocketAddress get_socket_peer_address(SocketHandle &sock);
+
+template <class T>
+Expected<T> socketGetOption(SocketHandle &sock, int level, int optId) {
+    T val;
+    socklen_t len = sizeof(val);
+    if (auto e =
+            expectError(getsockopt(sock.fileNo(), level, optId, &val, &len))) {
+        return e.error();
+    }
+    return val;
+}
+
+template <class T>
+Expected<> socketSetOption(SocketHandle &sock, int level, int opt,
+                           T const &optVal) {
+    return expectError(
+        setsockopt(sock.fileNo(), level, opt, &optVal, sizeof(optVal)));
+}
+
+Task<Expected<SocketHandle>> createSocket(int family, int type, int protocol);
+Task<Expected<SocketHandle>> socket_connect(SocketAddress const &addr);
+Task<Expected<SocketHandle>>
+socket_connect(SocketAddress const &addr,
+               std::chrono::steady_clock::duration timeout);
+
+Task<Expected<SocketHandle>> socket_connect(SocketAddress const &addr,
+                                            CancelToken cancel);
+Task<Expected<SocketListener>> listener_bind(SocketAddress const &addr,
+                                             int backlog = SOMAXCONN);
+Task<Expected<SocketHandle>> listener_accept(SocketListener &listener);
+Task<Expected<SocketHandle>> listener_accept(SocketListener &listener,
+                                             CancelToken cancel);
+Task<Expected<SocketHandle>> listener_accept(SocketListener &listener,
+                                             SocketAddress &peerAddr);
+Task<Expected<SocketHandle>> listener_accept(SocketListener &listener,
+                                             SocketAddress &peerAddr,
+                                             CancelToken cancel);
+Task<Expected<std::size_t>> socket_write(SocketHandle &sock,
+                                         std::span<char const> buf);
+Task<Expected<std::size_t>> socket_write_zc(SocketHandle &sock,
+                                            std::span<char const> buf);
+Task<Expected<std::size_t>> socket_read(SocketHandle &sock,
+                                        std::span<char> buf);
+Task<Expected<std::size_t>>
+socket_write(SocketHandle &sock, std::span<char const> buf, CancelToken cancel);
+Task<Expected<std::size_t>> socket_write_zc(SocketHandle &sock,
+                                            std::span<char const> buf,
+                                            CancelToken cancel);
+Task<Expected<std::size_t>> socket_read(SocketHandle &sock, std::span<char> buf,
+                                        CancelToken cancel);
+Task<Expected<std::size_t>>
+socket_write(SocketHandle &sock, std::span<char const> buf,
+             std::chrono::steady_clock::duration timeout);
+Task<Expected<std::size_t>>
+socket_read(SocketHandle &sock, std::span<char> buf,
+            std::chrono::steady_clock::duration timeout);
+Task<Expected<std::size_t>>
+socket_write(SocketHandle &sock, std::span<char const> buf,
+             std::chrono::steady_clock::duration timeout, CancelToken cancel);
+Task<Expected<std::size_t>>
+socket_read(SocketHandle &sock, std::span<char> buf,
+            std::chrono::steady_clock::duration timeout, CancelToken cancel);
+Task<Expected<>> socket_shutdown(SocketHandle &sock, int how = SHUT_RDWR);
+} // namespace co_async
+
+
+
+
+
+
+
+namespace co_async {
+Task<Expected<SocketHandle>>
+socket_proxy_connect(char const *host, int port, std::string_view proxy,
+                     std::chrono::steady_clock::duration timeout);
+} // namespace co_async
+
+
+
+
+
+
+
+
+
+namespace co_async {
+struct SocketStream : Stream {
+    Task<Expected<std::size_t>> raw_read(std::span<char> buffer) override {
+        auto ret =
+            co_await socket_read(mFile, buffer, mTimeout, co_await co_cancel);
+        if (ret == std::make_error_code(std::errc::operation_canceled))
+            [[unlikely]] {
+            co_return std::errc::stream_timeout;
+        }
+        co_return ret;
+    }
+
+    Task<Expected<std::size_t>>
+    raw_write(std::span<char const> buffer) override {
+        auto ret =
+            co_await socket_write(mFile, buffer, mTimeout, co_await co_cancel);
+        if (ret == std::make_error_code(std::errc::operation_canceled))
+            [[unlikely]] {
+            co_return std::errc::stream_timeout;
+        }
+        co_return ret;
+    }
+
+    SocketHandle release() noexcept {
+        return std::move(mFile);
+    }
+
+    SocketHandle &get() noexcept {
+        return mFile;
+    }
+
+    explicit SocketStream(SocketHandle file) : mFile(std::move(file)) {}
+
+    void raw_timeout(std::chrono::steady_clock::duration timeout) override {
+        mTimeout = timeout;
+    }
+
+private:
+    SocketHandle mFile;
+    std::chrono::steady_clock::duration mTimeout = std::chrono::seconds(30);
+};
+
+inline Task<Expected<OwningStream>>
+tcp_connect(char const *host, int port, std::string_view proxy,
+            std::chrono::steady_clock::duration timeout) {
+    auto handle =
+        co_await co_await socket_proxy_connect(host, port, proxy, timeout);
+    OwningStream sock = make_stream<SocketStream>(std::move(handle));
+    sock.timeout(timeout);
+    co_return sock;
+}
+
+inline Task<Expected<OwningStream>> tcp_accept(SocketListener &listener) {
+    auto handle = co_await co_await listener_accept(listener);
+    OwningStream sock = make_stream<SocketStream>(std::move(handle));
+    co_return sock;
+}
+} // namespace co_async
+
+
+
+
+namespace co_async {
+template <class T>
+struct PImplMethod {};
+
+template <class T>
+struct PImplConstruct {
+    static std::shared_ptr<T> construct();
+};
+
+#define StructPImpl(T) \
+    struct T; \
+    template <> \
+    struct PImplMethod<T>
+#define DefinePImpl(T) \
+    template <> \
+    std::shared_ptr<T> PImplConstruct<T>::construct() { \
+        return std::make_shared<T>(); \
+    }
+#define ForwardPImplMethod(T, func, args, ...) \
+    PImplMethod<T>::func args { \
+        return pimpl(this).func(__VA_ARGS__); \
+    }
+
+template <class T>
+struct PImpl : PImplMethod<T> {
+    PImpl()
+        requires(requires {
+            {
+                PImplConstruct<T>::construct()
+            } -> std::convertible_to<std::shared_ptr<T>>;
+        })
+        : mImpl(PImplConstruct<T>::construct()) {}
+
+    template <class... Args>
+        requires(sizeof...(Args) != 0 &&
+                 requires(Args &&...args) {
+                     {
+                         PImplConstruct<T>::construct(
+                             std::forward<Args>(args)...)
+                     } -> std::convertible_to<std::shared_ptr<T>>;
+                 })
+    explicit PImpl(Args &&...args)
+        : mImpl(PImplConstruct<T>::construct(std::forward<Args>(args)...)) {}
+
+    PImpl(std::nullptr_t) : mImpl(nullptr) {}
+
+    T &operator*() const noexcept {
+        return *mImpl;
+    }
+
+    T *operator->() const noexcept {
+        return mImpl.get();
+    }
+
+    T *impl() const noexcept {
+        return mImpl.get();
+    }
+
+    T *operator&() const noexcept {
+        return mImpl.get();
+    }
+
+    operator T &() const noexcept {
+        return *mImpl;
+    }
+
+    explicit operator bool() const noexcept {
+        return static_cast<bool>(mImpl);
+    }
+
+private:
+    std::shared_ptr<T> mImpl;
+};
+
+template <class T>
+T &pimpl(PImplMethod<T> const *that) {
+    return **static_cast<PImpl<T> const *>(that);
+}
+} // namespace co_async
+
+
+
+
+
+
+
+
+namespace co_async {
+std::error_category const &bearSSLCategory();
+
+StructPImpl(SSLClientTrustAnchor) {
+    Expected<> add(std::string_view content);
+};
+
+StructPImpl(SSLServerPrivateKey){};
+
+StructPImpl(SSLServerCertificate) {
+    Expected<> add(std::string_view content);
+};
+
+StructPImpl(SSLServerSessionCache){};
+Task<Expected<OwningStream>>
+ssl_connect(char const *host, int port, SSLClientTrustAnchor const &ta,
+            std::span<char const *const> protocols, std::string_view proxy,
+            std::chrono::steady_clock::duration timeout);
+OwningStream ssl_accept(SocketHandle file, SSLServerCertificate const &cert,
+                        SSLServerPrivateKey const &pkey,
+                        std::span<char const *const> protocols,
+                        SSLServerSessionCache *cache = nullptr);
+} // namespace co_async
+
+
+
+
+
+namespace co_async {
+OwningStream &stdio();
+OwningStream &raw_stdio();
+} // namespace co_async
+
+
+
+
+
+
+
+
+namespace co_async {
+struct IStringStream : Stream {
+    IStringStream() noexcept : mPosition(0) {}
+
+    IStringStream(std::string_view strView)
+        : mStringView(strView),
+          mPosition(0) {}
+
+    Task<Expected<std::size_t>> raw_read(std::span<char> buffer) override {
+        std::size_t size =
+            std::min(buffer.size(), mStringView.size() - mPosition);
+        std::copy_n(mStringView.begin() + mPosition, size, buffer.begin());
+        mPosition += size;
+        co_return size;
+    }
+
+    std::string_view str() const noexcept {
+        return mStringView;
+    }
+
+    std::string_view unread_str() const noexcept {
+        return mStringView.substr(mPosition);
+    }
+
+private:
+    std::string_view mStringView;
+    std::size_t mPosition;
+};
+
+struct OStringStream : Stream {
+    OStringStream(String &output) noexcept : mOutput(output) {}
+
+    Task<Expected<std::size_t>>
+    raw_write(std::span<char const> buffer) override {
+        mOutput.append(buffer.data(), buffer.size());
+        co_return buffer.size();
+    }
+
+    String &str() const noexcept {
+        return mOutput;
+    }
+
+    String release() noexcept {
+        return std::move(mOutput);
+    }
+
+private:
+    String &mOutput;
+};
+} // namespace co_async
+
+
+
+
+
+
+
+namespace co_async {
+Task<Expected<>> zlib_inflate(BorrowedStream &source, BorrowedStream &dest);
+Task<Expected<>> zlib_deflate(BorrowedStream &source, BorrowedStream &dest);
+} // namespace co_async
 
 
 
@@ -5984,6 +8000,2876 @@ private:
     std::map<K, V, std::less<>> mData;
 };
 } // namespace co_async
+
+
+
+
+
+
+namespace co_async {
+struct URIParams : SimpleMap<String, String> {
+    using SimpleMap<String, String>::SimpleMap;
+};
+
+struct URI {
+    String path;
+    URIParams params;
+
+public:
+    static void url_decode(String &r, std::string_view s);
+    static String url_decode(std::string_view s);
+    static void url_encode(String &r, std::string_view s);
+    static String url_encode(std::string_view s);
+    static void url_encode_path(String &r, std::string_view s);
+    static String url_encode_path(std::string_view s);
+    static URI parse(std::string_view uri);
+    void dump(String &r) const;
+    String dump() const;
+
+    String repr() const {
+        return dump();
+    }
+};
+} // namespace co_async
+
+
+
+
+
+
+
+
+
+
+namespace co_async {
+struct HTTPHeaders : SimpleMap<String, String> {
+    using SimpleMap<String, String>::SimpleMap;
+    // NOTE: user-specified http headers must not contain the following keys:
+    // - connection
+    // - acecpt-encoding
+    // - transfer-encoding
+    // - content-encoding
+    // - content-length
+    // they should only be used internally in our http protocol implementation
+};
+enum class HTTPContentEncoding {
+    Identity = 0,
+    Gzip,
+    Deflate,
+};
+
+struct HTTPRequest {
+    String method{"GET", 3};
+    URI uri{String{"/", 1}, {}};
+    HTTPHeaders headers{};
+
+    auto repr() const {
+        return std::make_tuple(method, uri, headers);
+    }
+};
+
+struct HTTPResponse {
+    int status{0};
+    HTTPHeaders headers{};
+
+    auto repr() const {
+        return std::make_tuple(status, headers);
+    }
+};
+
+struct HTTPProtocol {
+public:
+    OwningStream sock;
+
+    explicit HTTPProtocol(OwningStream sock) : sock(std::move(sock)) {}
+
+    HTTPProtocol(HTTPProtocol &&) = delete;
+    virtual ~HTTPProtocol() = default;
+    virtual void initServerState() = 0;
+    virtual void initClientState() = 0;
+    virtual Task<Expected<>> writeBodyStream(BorrowedStream &body) = 0;
+    virtual Task<Expected<>> readBodyStream(BorrowedStream &body) = 0;
+    virtual Task<Expected<>> writeBody(std::string_view body) = 0;
+    virtual Task<Expected<>> readBody(String &body) = 0;
+    virtual Task<Expected<>> writeRequest(HTTPRequest const &req) = 0;
+    virtual Task<Expected<>> readRequest(HTTPRequest &req) = 0;
+    virtual Task<Expected<>> writeResponse(HTTPResponse const &res) = 0;
+    virtual Task<Expected<>> readResponse(HTTPResponse &res) = 0;
+};
+
+struct HTTPProtocolVersion11 : HTTPProtocol {
+    using HTTPProtocol::HTTPProtocol;
+
+protected:
+    HTTPContentEncoding mContentEncoding;
+    String mAcceptEncoding;
+    std::optional<std::size_t> mContentLength;
+    HTTPContentEncoding httpContentEncodingByName(std::string_view name);
+    Task<Expected<>> parseHeaders(HTTPHeaders &headers);
+    Task<Expected<>> dumpHeaders(HTTPHeaders const &headers);
+    void handleContentEncoding(HTTPHeaders &headers);
+    void handleAcceptEncoding(HTTPHeaders &headers);
+    void
+    negotiateAcceptEncoding(HTTPHeaders &headers,
+                            std::span<HTTPContentEncoding const> encodings);
+    Task<Expected<>> writeChunked(BorrowedStream &body);
+    Task<Expected<>> writeChunkedString(std::string_view body);
+    Task<Expected<>> readChunked(BorrowedStream &body);
+    Task<Expected<>> readChunkedString(String &body);
+    Task<Expected<>> writeEncoded(BorrowedStream &body);
+    Task<Expected<>> writeEncodedString(std::string_view body);
+    Task<Expected<>> readEncoded(BorrowedStream &body);
+    Task<Expected<>> readEncodedString(String &body);
+#if CO_ASYNC_DEBUG
+    void checkPhase(int from, int to);
+
+private:
+    int mPhase = 0;
+#else
+    void checkPhase(int from, int to);
+#endif
+public:
+    Task<Expected<>> writeBodyStream(BorrowedStream &body) override;
+    Task<Expected<>> writeBody(std::string_view body) override;
+    Task<Expected<>> readBodyStream(BorrowedStream &body) override;
+    Task<Expected<>> readBody(String &body) override;
+    Task<Expected<>> writeRequest(HTTPRequest const &req) override;
+    void initServerState() override;
+    void initClientState() override;
+    Task<Expected<>> readRequest(HTTPRequest &req) override;
+    Task<Expected<>> writeResponse(HTTPResponse const &res) override;
+    Task<Expected<>> readResponse(HTTPResponse &res) override;
+    explicit HTTPProtocolVersion11(OwningStream sock);
+    ~HTTPProtocolVersion11() override;
+};
+
+struct HTTPProtocolVersion2 : HTTPProtocolVersion11 {
+    using HTTPProtocolVersion11::HTTPProtocolVersion11;
+};
+} // namespace co_async
+
+
+
+
+
+
+namespace co_async {
+String timePointToHTTPDate(std::chrono::system_clock::time_point tp);
+Expected<std::chrono::system_clock::time_point>
+httpDateToTimePoint(String const &date);
+String httpDateNow();
+std::string_view getHTTPStatusName(int status);
+String guessContentTypeByExtension(
+    std::string_view ext, char const *defaultType = "text/plain;charset=utf-8");
+String capitalizeHTTPHeader(std::string_view key);
+} // namespace co_async
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+namespace co_async {
+// 包装 request_streamed 返回的 body 读端：析构或 close 时取消后台读 body 的
+// 生产者协程。生产者一旦接手连接就独立于连接池生存，必须由读端显式终止，
+// 否则它挂在 socket recv 上时既会拖住 IOContext::run()（hasPendingEvents），
+// 也会让连接一直被占用。
+struct HTTPBodyStream : Stream {
+    OwningStream mInner;
+    std::shared_ptr<CancelSource> mCancel;
+
+    HTTPBodyStream(OwningStream inner, std::shared_ptr<CancelSource> cancel)
+        : mInner(std::move(inner)),
+          mCancel(std::move(cancel)) {}
+
+    Task<Expected<std::size_t>> raw_read(std::span<char> buffer) override {
+        return mInner.read(buffer);
+    }
+
+    Task<Expected<std::size_t>>
+    raw_write(std::span<char const> buffer) override {
+        return mInner.write(buffer);
+    }
+
+    Task<> raw_close() override {
+        co_await mInner.close();
+        if (mCancel) {
+            auto cancel = std::move(mCancel);
+            co_await cancel->cancel();
+        }
+        co_return;
+    }
+
+    ~HTTPBodyStream() override {
+        if (mCancel) {
+            // 析构函数里不能 co_await，把取消源的所有权移交给一个新协程，
+            // 由它保证 CancelSource 活到取消操作真正完成。
+            auto cancel = std::move(mCancel);
+            co_spawn(co_bind([cancel]() -> Task<> {
+                co_await cancel->cancel();
+            }));
+        }
+    }
+};
+
+struct HTTPConnection {
+private:
+    struct HTTPProtocolFactory {
+    protected:
+        std::string mHost;
+        int mPort;
+        std::string mHostName;
+        std::string mProxy;
+        std::chrono::steady_clock::duration mTimeout;
+
+    public:
+        HTTPProtocolFactory(std::string host, int port,
+                            std::string_view hostName, std::string proxy,
+                            std::chrono::steady_clock::duration timeout)
+            : mHost(std::move(host)),
+              mPort(port),
+              mHostName(hostName),
+              mProxy(std::move(proxy)),
+              mTimeout(timeout) {}
+
+        virtual Task<Expected<std::unique_ptr<HTTPProtocol>>>
+        createConnection() = 0;
+        virtual ~HTTPProtocolFactory() = default;
+
+        std::string const &hostName() const noexcept {
+            return mHostName;
+        }
+    };
+
+    struct HTTPProtocolFactoryHTTPS : HTTPProtocolFactory {
+        using HTTPProtocolFactory::HTTPProtocolFactory;
+
+        static PImpl<SSLClientTrustAnchor> &trustAnchors() {
+            static PImpl<SSLClientTrustAnchor> instance;
+            return instance;
+        }
+
+        Task<Expected<std::unique_ptr<HTTPProtocol>>>
+        createConnection() override {
+            static CallOnce taInitializeOnce;
+            static char const *const protocols[] = {
+                /* "h2", */
+                "http/1.1",
+            };
+            if (auto locked = co_await taInitializeOnce.call_once()) {
+                auto path = make_path("/etc/ssl/certs/ca-certificates.crt");
+                auto content = co_await co_await file_read(path);
+                co_await trustAnchors().add(content);
+                locked.set_ready();
+            }
+            auto sock = co_await co_await ssl_connect(mHost.c_str(), mPort,
+                                                      trustAnchors(), protocols,
+                                                      mProxy, mTimeout);
+            co_return std::make_unique<HTTPProtocolVersion11>(std::move(sock));
+        }
+    };
+
+    struct HTTPProtocolFactoryHTTP : HTTPProtocolFactory {
+        using HTTPProtocolFactory::HTTPProtocolFactory;
+
+        Task<Expected<std::unique_ptr<HTTPProtocol>>>
+        createConnection() override {
+            auto sock = co_await co_await tcp_connect(mHost.c_str(), mPort,
+                                                      mProxy, mTimeout);
+            co_return std::make_unique<HTTPProtocolVersion11>(std::move(sock));
+        }
+    };
+
+    std::unique_ptr<HTTPProtocol> mHttp;
+    std::unique_ptr<HTTPProtocolFactory> mHttpFactory;
+    friend struct HTTPConnectionPool;
+
+    void terminateLifetime() {
+        mHttp = nullptr;
+        mHttpFactory = nullptr;
+    }
+
+    struct RAIIPointerResetter {
+        std::unique_ptr<HTTPProtocol> *mHttp;
+        RAIIPointerResetter &operator=(RAIIPointerResetter &&) = delete;
+
+        void neverMind() {
+            mHttp = nullptr;
+        }
+
+        ~RAIIPointerResetter() {
+            if (mHttp) [[unlikely]] {
+                *mHttp = nullptr;
+            }
+        }
+    };
+
+    void builtinHeaders(HTTPRequest &req) {
+        using namespace std::string_literals;
+#if CO_ASYNC_DEBUG
+        if (!mHttpFactory) [[unlikely]] {
+            throw std::logic_error("http factory not initialized");
+        }
+#endif
+        req.headers.insert("host"_s, String{mHttpFactory->hostName()});
+        req.headers.insert("user-agent"_s, "co_async/0.0.1"_s);
+        req.headers.insert("accept"_s, "*/*"_s);
+#if CO_ASYNC_ZLIB
+        req.headers.insert("accept-encoding"_s, "deflate, gzip"_s);
+#else
+        req.headers.insert("accept-encoding"_s, "gzip"_s);
+#endif
+    }
+
+    Task<Expected<>> tryWriteRequestAndBody(HTTPRequest const &request,
+                                            std::string_view body) {
+        if (!mHttp)
+            mHttp = co_await co_await mHttpFactory->createConnection();
+        co_await co_await mHttp->writeRequest(request);
+        co_await co_await mHttp->writeBody(body);
+        co_return {};
+#if 0
+        std::error_code ec;
+        for (std::size_t n = 0; n < 3; ++n) {
+            if (!mHttp) {
+                if (auto e = co_await mHttpFactory->createConnection())
+                    [[likely]] {
+                    mHttp = std::move(*e);
+                    mHttp->initClientState();
+                } else {
+                    ec = e.error();
+                    continue;
+                }
+            }
+            if (co_await mHttp->writeRequest(request) &&
+                co_await mHttp->writeBody(body) &&
+                co_await mHttp->sock.peekchar()) [[likely]] {
+                co_return {};
+            }
+            mHttp = nullptr;
+        }
+        co_return ec;
+#endif
+    }
+
+    /* Task<Expected<>> */
+    /* tryWriteRequestAndBodyStream(HTTPRequest const &request, */
+    /*                              BorrowedStream &bodyStream) { */
+    /*     auto cachedStream = make_stream<CachedStream>(bodyStream); */
+    /*     for (std::size_t n = 0; n < 3; ++n) { */
+    /*         if (!mHttp) { */
+    /*             if (auto e = co_await mHttpFactory->createConnection()) */
+    /*                 [[likely]] { */
+    /*                 mHttp = std::move(*e); */
+    /*                 mHttp->initClientState(); */
+    /*             } else { */
+    /*                 continue; */
+    /*             } */
+    /*         } */
+    /*         if (co_await mHttp->writeRequest(request) && */
+    /*             co_await mHttp->writeBodyStream(cachedStream) && */
+    /*             co_await mHttp->sock.peekchar()) [[likely]] { */
+    /*             co_return {}; */
+    /*         } */
+    /*         (void)cachedStream.seek(0); */
+    /*         mHttp = nullptr; */
+    /*     } */
+    /*     co_return std::errc::connection_aborted; */
+    /* } */
+    HTTPConnection(std::unique_ptr<HTTPProtocolFactory> httpFactory)
+        : mHttp(nullptr),
+          mHttpFactory(std::move(httpFactory)) {}
+
+private:
+    static std::tuple<std::string, int>
+    parseHostAndPort(std::string_view hostName, int defaultPort) {
+        int port = defaultPort;
+        auto host = hostName;
+        if (auto i = host.rfind(':'); i != host.npos) {
+            if (auto portOpt = from_string<int>(host.substr(i + 1)))
+                [[likely]] {
+                port = *portOpt;
+                host.remove_suffix(host.size() - i);
+            }
+        }
+        return {std::string(host), port};
+    }
+
+public:
+    BorrowedStream &extractSocket() const noexcept {
+        return mHttp->sock;
+    }
+
+    Expected<> doConnect(std::string_view host,
+                         std::chrono::steady_clock::duration timeout,
+                         bool followProxy) {
+        terminateLifetime();
+        if (host.starts_with("https://")) {
+            host.remove_prefix(8);
+            std::string proxy;
+            if (followProxy) [[likely]] {
+                if (auto p = std::getenv("https_proxy")) {
+                    proxy = p;
+                }
+            }
+            auto [h, p] = parseHostAndPort(host, 443);
+            mHttpFactory = std::make_unique<HTTPProtocolFactoryHTTPS>(
+                std::move(h), p, host, std::move(proxy), timeout);
+            return {};
+        } else if (host.starts_with("http://")) {
+            host.remove_prefix(7);
+            std::string proxy;
+            if (followProxy) {
+                if (auto p = std::getenv("http_proxy")) {
+                    proxy = p;
+                }
+            }
+            auto [h, p] = parseHostAndPort(host, 80);
+            mHttpFactory = std::make_unique<HTTPProtocolFactoryHTTP>(
+                std::move(h), p, host, std::move(proxy), timeout);
+            return {};
+        } else [[unlikely]] {
+            return std::errc::protocol_not_supported;
+        }
+    }
+
+    HTTPConnection() = default;
+
+    Task<Expected<std::tuple<HTTPResponse, String>>>
+    request(HTTPRequest req, std::string_view in = {}) {
+        builtinHeaders(req);
+        RAIIPointerResetter reset(&mHttp);
+        co_await co_await tryWriteRequestAndBody(req, in);
+        HTTPResponse res;
+        String body;
+        co_await co_await mHttp->readResponse(res);
+        co_await co_await mHttp->readBody(body);
+        reset.neverMind();
+        co_return std::tuple{std::move(res), std::move(body)};
+    }
+
+    Task<Expected<std::tuple<HTTPResponse, OwningStream>>>
+    request_streamed(HTTPRequest req, std::string_view in = {}) {
+        builtinHeaders(req);
+        RAIIPointerResetter reset(&mHttp);
+        co_await co_await tryWriteRequestAndBody(req, in);
+        HTTPResponse res;
+        std::string body;
+        co_await co_await mHttp->readResponse(res);
+        auto [r, w] = pipe_stream();
+        // 连接的所有权转交给生产者协程：连接池析构时不能再碰这份连接，否则
+        // 生产者还挂在 recv 上时 socket/缓冲区被释放，醒来即 use-after-free。
+        auto http = std::move(mHttp);
+        auto cancel = std::make_shared<CancelSource>();
+        co_spawn(co_cancel.bind(
+            cancel->token(),
+            pipe_bind(std::move(w),
+                      [http = std::move(http),
+                       cancel](OwningStream &w) mutable -> Task<Expected<>> {
+                          (void)cancel; // 让取消源活满生产者的整个生命周期
+                          co_await co_await http->readBodyStream(w);
+                          co_return {};
+                      })));
+        reset.neverMind();
+        co_return std::tuple{
+            res, make_stream<HTTPBodyStream>(std::move(r), std::move(cancel))};
+    }
+};
+
+struct HTTPConnectionPool {
+private:
+    struct alignas(hardware_destructive_interference_size) PoolEntry {
+        HTTPConnection mHttp;
+        std::atomic_bool mInuse{false};
+        bool mValid{false};
+        std::chrono::steady_clock::time_point mLastAccess;
+    };
+
+    struct HostPool {
+        std::vector<PoolEntry> mPool;
+        ConditionVariable mFreeSlot;
+
+        explicit HostPool(std::size_t size) : mPool(size) {}
+    };
+
+    std::shared_mutex mMutex;
+    SimpleMap<std::string, HostPool> mPools;
+    std::chrono::steady_clock::duration mTimeout;
+    std::chrono::steady_clock::duration mKeepAlive;
+    std::chrono::steady_clock::time_point mLastGC;
+    std::size_t mConnPerHost;
+    bool mFollowProxy;
+
+public:
+    struct HTTPConnectionPtr {
+    private:
+        PoolEntry *mEntry;
+        HostPool *mPool;
+
+        explicit HTTPConnectionPtr(PoolEntry *entry, HostPool *pool) noexcept
+            : mEntry(entry),
+              mPool(pool) {}
+
+        friend HTTPConnectionPool;
+
+    public:
+        HTTPConnectionPtr() noexcept : mEntry(nullptr) {}
+
+        HTTPConnectionPtr(HTTPConnectionPtr &&that) noexcept
+            : mEntry(std::exchange(that.mEntry, nullptr)),
+              mPool(std::exchange(that.mPool, nullptr)) {}
+
+        HTTPConnectionPtr &operator=(HTTPConnectionPtr &&that) noexcept {
+            std::swap(mEntry, that.mEntry);
+            std::swap(mPool, that.mPool);
+            return *this;
+        }
+
+        ~HTTPConnectionPtr() {
+            if (mEntry) {
+                mEntry->mLastAccess = std::chrono::steady_clock::now();
+                mEntry->mInuse.store(false, std::memory_order_release);
+                mPool->mFreeSlot.notify_one();
+            }
+        }
+
+        HTTPConnection &operator*() const noexcept {
+            return mEntry->mHttp;
+        }
+
+        HTTPConnection *operator->() const noexcept {
+            return &mEntry->mHttp;
+        }
+    };
+
+    explicit HTTPConnectionPool(
+        std::size_t connPerHost = 8,
+        std::chrono::steady_clock::duration timeout = std::chrono::seconds(20),
+        std::chrono::steady_clock::duration keepAlive = std::chrono::minutes(3),
+        bool followProxy = true)
+        : mTimeout(timeout),
+          mKeepAlive(keepAlive),
+          mConnPerHost(connPerHost),
+          mFollowProxy(followProxy) {}
+
+private:
+    std::optional<Expected<HTTPConnectionPtr>>
+    lookForFreeSlot(std::string_view host) /* MT-safe */ {
+        std::shared_lock lock(mMutex);
+        auto *pool = mPools.at(host);
+        lock.unlock();
+        if (!pool) {
+            std::lock_guard wlock(mMutex);
+            pool = mPools.at(host);
+            if (!pool) [[likely]] {
+                pool = &mPools.emplace(std::string(host), mConnPerHost);
+            }
+        }
+        for (auto &entry: pool->mPool) {
+            bool expected = false;
+            if (entry.mInuse.compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel)) {
+                if (entry.mValid) {
+                    entry.mLastAccess = std::chrono::steady_clock::now();
+                } else {
+                    if (auto e =
+                            entry.mHttp.doConnect(host, mTimeout, mFollowProxy);
+                        e.has_error()) [[unlikely]] {
+                        return std::move(e).error();
+                    }
+                    entry.mLastAccess = std::chrono::steady_clock::now();
+                    entry.mValid = true;
+                }
+                return HTTPConnectionPtr(&entry, pool);
+            }
+        }
+        return std::nullopt;
+    }
+
+    Task<> waitForFreeSlot(std::string_view host) /* MT-safe */ {
+        std::shared_lock lock(mMutex);
+        auto *pool = mPools.at(host);
+        lock.unlock();
+        if (pool) [[likely]] {
+            (void)co_await co_timeout(pool->mFreeSlot.wait(),
+                                      std::chrono::milliseconds(100));
+        }
+        co_return;
+    }
+
+    void garbageCollect() /* MT-safe */ {
+        auto now = std::chrono::steady_clock::now();
+        if ((now - mLastGC) * 2 > mKeepAlive) {
+            std::shared_lock lock(mMutex);
+            for (auto &[_, pool]: mPools) {
+                for (auto &entry: pool.mPool) {
+                    bool expected = false;
+                    if (entry.mInuse.compare_exchange_strong(
+                            expected, true, std::memory_order_acq_rel)) {
+                        if (entry.mValid &&
+                            now - entry.mLastAccess > mKeepAlive) {
+                            entry.mHttp.terminateLifetime();
+                            entry.mValid = false;
+                        }
+                        entry.mInuse.store(false, std::memory_order_release);
+                    }
+                }
+                mLastGC = now;
+            }
+        }
+    }
+
+public:
+    Task<Expected<HTTPConnectionPtr>>
+    connect(std::string_view host) /* MT-safe */ {
+    again:
+        garbageCollect();
+        if (auto conn = lookForFreeSlot(host)) {
+            co_return std::move(*conn);
+        }
+        co_await waitForFreeSlot(host);
+        goto again;
+    }
+};
+} // namespace co_async
+
+
+#ifdef __linux__
+# include <unistd.h>
+#endif
+
+
+#ifdef __linux__
+
+
+
+
+
+namespace co_async {
+struct FSPipeHandlePair {
+    FileHandle mReader;
+    FileHandle mWriter;
+
+    std::array<OwningStream, 2> stream() {
+        return {file_from_handle(reader()), file_from_handle(writer())};
+    }
+
+    FileHandle reader() {
+# if CO_ASYNC_DEBUG
+        if (!mReader) [[unlikely]] {
+            throw std::logic_error(
+                "PipeHandlePair::reader() can only be called once");
+        }
+# endif
+        return std::move(mReader);
+    }
+
+    FileHandle writer() {
+# if CO_ASYNC_DEBUG
+        if (!mWriter) [[unlikely]] {
+            throw std::logic_error(
+                "PipeHandlePair::writer() can only be called once");
+        }
+# endif
+        return std::move(mWriter);
+    }
+};
+
+inline Task<Expected<FSPipeHandlePair>> fs_pipe() {
+    int p[2];
+    // 必须 O_CLOEXEC：否则 spawn 出的子进程会连对端一起继承（例如写端落到
+    // `cat` 手里），对端就永远等不到 EOF。
+    int res = pipe2(p, O_CLOEXEC);
+    if (res < 0) [[unlikely]] {
+        res = -errno;
+    }
+    co_await expectError(res);
+    co_return FSPipeHandlePair{FileHandle(p[0]), FileHandle(p[1])};
+}
+
+inline Task<Expected<>> send_file(FileHandle &sock, FileHandle &&file) {
+    auto [readPipe, writePipe] = co_await co_await fs_pipe();
+    while (auto n = co_await co_await fs_splice(file, writePipe, 65536)) {
+        std::size_t m;
+        while ((m = co_await co_await fs_splice(readPipe, sock, n)) < n)
+            [[unlikely]] {
+            n -= m;
+        }
+    }
+    co_await co_await fs_close(std::move(file));
+    co_await co_await fs_close(std::move(readPipe));
+    co_await co_await fs_close(std::move(writePipe));
+    co_return {};
+}
+
+inline Task<Expected<>> recv_file(FileHandle &sock, FileHandle &&file) {
+    auto [readPipe, writePipe] = co_await co_await fs_pipe();
+    while (auto n = co_await co_await fs_splice(sock, writePipe, 65536)) {
+        std::size_t m;
+        while ((m = co_await co_await fs_splice(readPipe, file, n)) < n)
+            [[unlikely]] {
+            n -= m;
+        }
+    }
+    co_await co_await fs_close(std::move(file));
+    co_await co_await fs_close(std::move(readPipe));
+    co_await co_await fs_close(std::move(writePipe));
+    co_return {};
+}
+} // namespace co_async
+#endif
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+namespace co_async {
+enum class HTTPRouteMode {
+    SuffixAny = 0, // "/a-9\\*g./.."
+    SuffixName,    // "/a"
+    SuffixPath,    // "/a/b/c"
+};
+
+struct SSLServerState {
+    PImpl<SSLServerCertificate> cert;
+    PImpl<SSLServerPrivateKey> skey;
+    PImpl<SSLServerSessionCache> cache;
+};
+
+struct HTTPServer {
+    struct IO {
+        explicit IO(HTTPProtocol *http) noexcept : mHttp(http) {}
+
+        HTTPRequest request;
+        Task<Expected<bool>> readRequestHeader();
+        Task<Expected<String>> request_body();
+        Task<Expected<>> request_body_stream(OwningStream &out);
+        Task<Expected<>> response(HTTPResponse resp, std::string_view content);
+        Task<Expected<>> response(HTTPResponse resp, OwningStream &body);
+
+        BorrowedStream &extractSocket() const noexcept {
+            return mHttp->sock;
+        }
+
+    private:
+        HTTPProtocol *mHttp;
+        bool mBodyRead = false;
+#if CO_ASYNC_DEBUG
+        HTTPResponse mResponseSavedForDebug{};
+        friend HTTPServer;
+#endif
+        void builtinHeaders(HTTPResponse &res);
+    };
+
+    using HTTPHandler = std::function<Task<Expected<>>(IO &)>;
+    using HTTPPrefixHandler =
+        std::function<Task<Expected<>>(IO &, std::string_view)>;
+    /* using HTTPHandler = Task<Expected<>>(*)(IO &); */
+    /* using HTTPPrefixHandler = Task<Expected<>>(*)(IO &, std::string_view); */
+    HTTPServer();
+    ~HTTPServer();
+    HTTPServer(HTTPServer &&) = delete;
+#if CO_ASYNC_DEBUG
+    void enableLogRequests();
+#endif
+    void timeout(std::chrono::steady_clock::duration timeout);
+    void route(std::string_view methods, std::string_view path,
+               HTTPHandler handler);
+    void route(std::string_view methods, std::string_view prefix,
+               HTTPRouteMode mode, HTTPPrefixHandler handler);
+    void route(HTTPHandler handler);
+    Task<std::unique_ptr<HTTPProtocol>>
+    prepareHTTPS(SocketHandle handle, SSLServerState &https) const;
+    Task<std::unique_ptr<HTTPProtocol>> prepareHTTP(SocketHandle handle) const;
+    Task<Expected<>> handle_http(SocketHandle handle) const;
+    Task<Expected<>> handle_http_redirect_to_https(SocketHandle handle) const;
+    Task<Expected<>> handle_https(SocketHandle handle,
+                                  SSLServerState &https) const;
+    Task<Expected<>>
+    doHandleConnection(std::unique_ptr<HTTPProtocol> http) const;
+    static Task<Expected<>> make_error_response(IO &io, int status);
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> const mImpl;
+};
+} // namespace co_async
+
+
+
+
+
+
+
+namespace co_async {
+struct HTTPServerUtils {
+    static String html_encode(std::string_view str);
+    static Task<Expected<>>
+    make_ok_response(HTTPServer::IO &io, std::string_view body,
+                     String contentType = "text/html;charset=utf-8");
+    static Task<Expected<>>
+    make_response_from_directory(HTTPServer::IO &io,
+                                 std::filesystem::path path);
+    static Task<Expected<>> make_error_response(HTTPServer::IO &io, int status);
+    static Task<Expected<>>
+    make_response_from_file_or_directory(HTTPServer::IO &io,
+                                         std::filesystem::path path);
+    static Task<Expected<>> make_response_from_path(HTTPServer::IO &io,
+                                                    std::filesystem::path path);
+    static Task<Expected<>> make_response_from_file(HTTPServer::IO &io,
+                                                    std::filesystem::path path);
+};
+} // namespace co_async
+
+
+
+
+namespace co_async {
+
+template <class T>
+constexpr T bruteForceByteSwap(T value) {
+    if constexpr (sizeof(T) > 1) {
+        char* ptr = reinterpret_cast<char*>(&value);
+        for (size_t i = 0; i < sizeof(T) / 2; ++i) {
+            std::swap(ptr[i], ptr[sizeof(T) - 1 - i]);
+        }
+    }
+    return value;
+}
+
+template <class T>
+    requires (std::is_trivial_v<T> && !std::is_integral_v<T>)
+constexpr T byteswap(T value) {
+    return bruteForceByteSwap(value);
+}
+
+template <class T>
+    requires std::is_integral_v<T>
+constexpr T byteswap(T value) {
+#if __cpp_lib_byteswap
+    return std::byteswap(value);
+#elif defined(__GNUC__) && defined(__has_builtin)
+#if __has_builtin(__builtin_bswap)
+    return __builtin_bswap(value);
+#else
+    return bruteForceByteSwap(value);
+#endif
+#else
+    return brute_force_byteswap(value);
+#endif
+}
+
+#if __cpp_lib_endian // C++20 支持的 <bit> 头文件中可以方便地判断本地硬件的大小端
+inline constexpr bool is_little_endian = std::endian::native == std::endian::little;
+#else
+#if _MSC_VER
+#include <endian.h>
+#if defined(__BYTE_ORDER) && __BYTE_ORDER != 0 && __BYTE_ORDER == __BIG_ENDIAN
+inline constexpr bool is_little_endian = false;
+#else
+inline constexpr bool is_little_endian = true;
+#endif
+#else
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ != 0
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+inline constexpr bool is_little_endian = false;
+#elif __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+inline constexpr bool is_little_endian = true;
+#else
+inline constexpr bool is_little_endian = true;
+#endif
+#else
+inline constexpr bool is_little_endian = true;
+#endif
+#endif
+#endif
+
+template <class T>
+    requires std::is_trivial_v<T>
+constexpr T byteswap_if_little(T value) {
+    if constexpr (is_little_endian) {
+        return byteswap(value);
+    } else {
+        return value;
+    }
+}
+
+}
+
+
+
+
+namespace co_async {
+
+inline uint32_t getSeedByTime() {
+    return static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+}
+
+inline uint32_t getSecureSeed() {
+    return std::random_device{}();
+}
+
+inline uint32_t wangsHash(uint32_t x) noexcept {
+    x = (x ^ 61) ^ (x >> 16);
+    x *= 9;
+    x = x ^ (x >> 4);
+    x *= 0x27d4eb2d;
+    x = x ^ (x >> 15);
+    return x;
+}
+
+struct WangsHash {
+    using result_type = uint32_t;
+
+    result_type mSeed;
+
+    WangsHash(result_type seed) noexcept : mSeed(seed) {
+    }
+
+    void seed(result_type seed) noexcept {
+        mSeed = seed;
+    }
+
+    result_type operator()() noexcept {
+        mSeed = wangsHash(mSeed);
+        return mSeed;
+        std::mt19937 mt;
+        mt.discard(1);
+    }
+
+    static result_type max() noexcept {
+        return std::numeric_limits<result_type>::max();
+    }
+
+    static result_type min() noexcept {
+        return std::numeric_limits<result_type>::min();
+    }
+};
+
+}
+
+
+
+
+
+/* #include <array> */
+/* #include <cstddef> */
+/* #include <cstdint> */
+/* #include <map> */
+/* #include <memory> */
+/* #include <optional> */
+/* #include <string> */
+/* #include <string_view> */
+/* #include <type_traits> */
+/* #include <unordered_map> */
+/* #include <variant> */
+/* #include <vector> */
+
+namespace co_async {
+#if defined(_MSC_VER) && (!defined(_MSVC_TRADITIONAL) || _MSVC_TRADITIONAL)
+# define REFLECT(...) \
+     __pragma(message("Please turn on /Zc:preprocessor before using " \
+                      "REFLECT!"))
+# define REFLECT_GLOBAL(...) \
+     __pragma(message("Please turn on /Zc:preprocessor before using " \
+                      "REFLECT!"))
+# define REFLECT_GLOBAL_TEMPLATED(...) \
+     __pragma(message("Please turn on /Zc:preprocessor before using " \
+                      "REFLECT!"))
+# define REFLECT__PP_VA_OPT_SUPPORT(...) 0
+#else
+# define REFLECT__PP_CONCAT_(a, b)          a##b
+# define REFLECT__PP_CONCAT(a, b)           REFLECT__PP_CONCAT_(a, b)
+# define REFLECT__PP_GET_1(a, ...)          a
+# define REFLECT__PP_GET_2(a, b, ...)       b
+# define REFLECT__PP_GET_3(a, b, c, ...)    c
+# define REFLECT__PP_GET_4(a, b, c, d, ...) d
+# define REFLECT__PP_VA_EMPTY_(...)         REFLECT__PP_GET_2(__VA_OPT__(, ) 0, 1, )
+# define REFLECT__PP_VA_OPT_SUPPORT         !REFLECT__PP_VA_EMPTY_
+# if REFLECT__PP_VA_OPT_SUPPORT(?)
+#  define REFLECT__PP_VA_EMPTY(...) REFLECT__PP_VA_EMPTY_(__VA_ARGS__)
+# else
+#  define REFLECT__PP_VA_EMPTY(...) 0
+# endif
+# define REFLECT__PP_IF(a, t, f)  REFLECT__PP_IF_(a, t, f)
+# define REFLECT__PP_IF_(a, t, f) REFLECT__PP_IF__(a, t, f)
+# define REFLECT__PP_IF__(a, t, f) \
+     REFLECT__PP_IF___(REFLECT__PP_VA_EMPTY a, t, f)
+# define REFLECT__PP_IF___(a, t, f)  REFLECT__PP_IF____(a, t, f)
+# define REFLECT__PP_IF____(a, t, f) REFLECT__PP_IF_##a(t, f)
+# define REFLECT__PP_IF_0(t, f)      REFLECT__PP_UNWRAP_BRACE(f)
+# define REFLECT__PP_IF_1(t, f)      REFLECT__PP_UNWRAP_BRACE(t)
+# define REFLECT__PP_NARG(...) \
+     REFLECT__PP_IF((__VA_ARGS__), (0), \
+                    (REFLECT__PP_NARG_(__VA_ARGS__, 26, 25, 24, 23, 22, 21, \
+                                       20, 19, 18, 17, 16, 15, 14, 13, 12, 11, \
+                                       10, 9, 8, 7, 6, 5, 4, 3, 2, 1)))
+# define REFLECT__PP_NARG_(...) REFLECT__PP_NARG__(__VA_ARGS__)
+# define REFLECT__PP_NARG__(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, \
+                            _13, _14, _15, _16, _17, _18, _19, _20, _21, _22, \
+                            _23, _24, _25, _26, N, ...) \
+     N
+# define REFLECT__PP_FOREACH(f, ...) \
+     REFLECT__PP_FOREACH_(REFLECT__PP_NARG(__VA_ARGS__), f, __VA_ARGS__)
+# define REFLECT__PP_FOREACH_(N, f, ...) \
+     REFLECT__PP_FOREACH__(N, f, __VA_ARGS__)
+# define REFLECT__PP_FOREACH__(N, f, ...) \
+     REFLECT__PP_FOREACH_##N(f, __VA_ARGS__)
+# define REFLECT__PP_FOREACH_0(f, ...)
+# define REFLECT__PP_FOREACH_1(f, a)             f(a)
+# define REFLECT__PP_FOREACH_2(f, a, b)          f(a) f(b)
+# define REFLECT__PP_FOREACH_3(f, a, b, c)       f(a) f(b) f(c)
+# define REFLECT__PP_FOREACH_4(f, a, b, c, d)    f(a) f(b) f(c) f(d)
+# define REFLECT__PP_FOREACH_5(f, a, b, c, d, e) f(a) f(b) f(c) f(d) f(e)
+# define REFLECT__PP_FOREACH_6(f, a, b, c, d, e, g) \
+     f(a) f(b) f(c) f(d) f(e) f(g)
+# define REFLECT__PP_FOREACH_7(f, a, b, c, d, e, g, h) \
+     f(a) f(b) f(c) f(d) f(e) f(g) f(h)
+# define REFLECT__PP_FOREACH_8(f, a, b, c, d, e, g, h, i) \
+     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i)
+# define REFLECT__PP_FOREACH_9(f, a, b, c, d, e, g, h, i, j) \
+     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j)
+# define REFLECT__PP_FOREACH_10(f, a, b, c, d, e, g, h, i, j, k) \
+     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k)
+# define REFLECT__PP_FOREACH_11(f, a, b, c, d, e, g, h, i, j, k, l) \
+     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l)
+# define REFLECT__PP_FOREACH_12(f, a, b, c, d, e, g, h, i, j, k, l, m) \
+     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m)
+# define REFLECT__PP_FOREACH_13(f, a, b, c, d, e, g, h, i, j, k, l, m, n) \
+     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n)
+# define REFLECT__PP_FOREACH_14(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o) \
+     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o)
+# define REFLECT__PP_FOREACH_15(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
+                                p) \
+     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) f(p)
+# define REFLECT__PP_FOREACH_16(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
+                                p, q) \
+     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) \
+         f(p) f(q)
+# define REFLECT__PP_FOREACH_17(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
+                                p, q, r) \
+     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) \
+         f(p) f(q) f(r)
+# define REFLECT__PP_FOREACH_18(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
+                                p, q, r, s) \
+     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) \
+         f(p) f(q) f(r) f(s)
+# define REFLECT__PP_FOREACH_19(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
+                                p, q, r, s, t) \
+     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) \
+         f(p) f(q) f(r) f(s) f(t)
+# define REFLECT__PP_FOREACH_20(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
+                                p, q, r, s, t, u) \
+     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) \
+         f(p) f(q) f(r) f(s) f(t) f(u)
+# define REFLECT__PP_FOREACH_21(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
+                                p, q, r, s, t, u, v) \
+     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) \
+         f(p) f(q) f(r) f(s) f(t) f(u) f(v)
+# define REFLECT__PP_FOREACH_22(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
+                                p, q, r, s, t, u, v, w) \
+     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) \
+         f(p) f(q) f(r) f(s) f(t) f(u) f(v) f(w)
+# define REFLECT__PP_FOREACH_23(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
+                                p, q, r, s, t, u, v, w, x) \
+     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) \
+         f(p) f(q) f(r) f(s) f(t) f(u) f(v) f(w) f(x)
+# define REFLECT__PP_FOREACH_24(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
+                                p, q, r, s, t, u, v, w, x, y) \
+     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) \
+         f(p) f(q) f(r) f(s) f(t) f(u) f(v) f(w) f(x) f(y)
+# define REFLECT__PP_FOREACH_25(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
+                                p, q, r, s, t, u, v, w, x, y, z) \
+     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) \
+         f(p) f(q) f(r) f(s) f(t) f(u) f(v) f(w) f(x) f(y) f(z)
+# define REFLECT__PP_STRINGIFY(...)     REFLECT__PP_STRINGIFY(__VA_ARGS__)
+# define REFLECT__PP_STRINGIFY_(...)    #__VA_ARGS__
+# define REFLECT__PP_EXPAND(...)        REFLECT__PP_EXPAND_(__VA_ARGS__)
+# define REFLECT__PP_EXPAND_(...)       __VA_ARGS__
+# define REFLECT__PP_UNWRAP_BRACE(...)  REFLECT__PP_UNWRAP_BRACE_ __VA_ARGS__
+# define REFLECT__PP_UNWRAP_BRACE_(...) __VA_ARGS__
+# ifdef DEBUG_REPR
+#  define REFLECT__EXTRA(...)        DEBUG_REPR(__VA_ARGS__)
+#  define REFLECT_GLOBAL__EXTRA(...) DEBUG_REPR_GLOBAL(__VA_ARGS__)
+#  define REFLECT_GLOBAL_TEMPLATED__EXTRA(...) \
+      DEBUG_REPR_GLOBAL_TEMPLATED(__VA_ARGS__)
+# else
+#  define REFLECT__EXTRA(...)
+#  define REFLECT_GLOBAL__EXTRA(...)
+#  define REFLECT_GLOBAL_TEMPLATED__EXTRA(...)
+# endif
+# define REFLECT__ON_EACH(x) reflector(#x, x);
+# define REFLECT(...) \
+     template <class ReflectorT> \
+     constexpr void REFLECT__MEMBERS(ReflectorT &reflector){ \
+         REFLECT__PP_FOREACH(REFLECT__ON_EACH, \
+                             __VA_ARGS__)} REFLECT__EXTRA(__VA_ARGS__)
+# define REFLECT__GLOBAL_ON_EACH(x) \
+     reflector(#x##_REFLECT__static_string, object.x);
+# define REFLECT_GLOBAL(T, ...) \
+     template <class ReflectorT> \
+     constexpr void REFLECT__MEMBERS(ReflectorT &reflector, T &object){ \
+         REFLECT__PP_FOREACH(REFLECT__GLOBAL_ON_EACH, \
+                             __VA_ARGS__)} REFLECT_GLOBAL__EXTRA(__VA_ARGS__)
+# define REFLECT_GLOBAL_TEMPLATED(T, Tmpls, TmplsClassed, ...) \
+     template <class ReflectorT, REFLECT__PP_UNWRAP_BRACE(TmplsClassed)> \
+     constexpr void REFLECT__MEMBERS( \
+         ReflectorT &reflector, \
+         T<REFLECT__PP_UNWRAP_BRACE(Tmpls)> &object){REFLECT__PP_FOREACH( \
+         REFLECT__GLOBAL_ON_EACH, \
+         __VA_ARGS__)} REFLECT_GLOBAL_TEMPLATED__EXTRA(__VA_ARGS__)
+#endif
+struct JsonValue {
+    using Ptr = std::unique_ptr<JsonValue>;
+    using Null = std::monostate;
+    using String = std::string;
+    using Dict = std::map<std::string, JsonValue::Ptr>;
+    using Array = std::vector<JsonValue::Ptr>;
+    using Integer = std::int64_t;
+    using Real = double;
+    using Boolean = bool;
+    using Union =
+        std::variant<Null, String, Dict, Array, Integer, Real, Boolean>;
+    Union inner;
+
+    template <class T>
+    explicit JsonValue(std::in_place_type_t<T>, T &&value)
+        : inner(std::in_place_type<T>, std::move(value)) {}
+
+    template <class T>
+    static Ptr make(T value) {
+        return std::make_unique<JsonValue>(std::in_place_type<T>,
+                                           std::move(value));
+    }
+};
+
+/* template <class T> */
+/* struct NoDefault { */
+/* private: */
+/*     T value; */
+/*  */
+/* public: */
+/*     NoDefault(T &&value) noexcept(std::is_nothrow_move_constructible_v<T>) */
+/*         : value(std::move(value)) {} */
+/*  */
+/*     NoDefault(T const &value)
+ * noexcept(std::is_nothrow_copy_constructible_v<T>) */
+/*         : value(value) {} */
+/*  */
+/*     template <class U, class = std::enable_if_t<std::is_convertible_v<U, T>>>
+ */
+/*     NoDefault(U &&value) noexcept(std::is_nothrow_convertible_v<U, T>) */
+/*         : value(std::forward<U>(value)) {} */
+/*  */
+/*     template <class = std::enable_if_t<std::is_convertible_v< */
+/*                   std::initializer_list<typename T::value_type>, T>>> */
+/*     NoDefault(std::initializer_list<typename T::value_type> value) noexcept(
+ */
+/*         std::is_nothrow_convertible_v< */
+/*             std::initializer_list<typename T::value_type>, T>) */
+/*         : value(std::move(value)) {} */
+/*  */
+/*     NoDefault(NoDefault const &) = default; */
+/*     NoDefault &operator=(NoDefault const &) = default; */
+/*     NoDefault(NoDefault &&) = default; */
+/*     NoDefault &operator=(NoDefault &&) = default; */
+/*  */
+/*     T &operator*() noexcept { */
+/*         return value; */
+/*     } */
+/*  */
+/*     T const &operator*() const noexcept { */
+/*         return value; */
+/*     } */
+/*  */
+/*     T *operator->() noexcept { */
+/*         return std::addressof(value); */
+/*     } */
+/*  */
+/*     T const *operator->() const noexcept { */
+/*         return std::addressof(value); */
+/*     } */
+/*  */
+/*     using value_type = T; */
+/* }; */
+
+struct JsonEncoder;
+
+template <class T, class = void>
+struct JsonTrait {
+    static void putValue(JsonEncoder *encoder, T const &value) {
+        static_assert(!std::is_same_v<T, T>,
+                      "the given type contains members that are not reflected, "
+                      "please add REFLECT macro to it");
+    }
+
+    static bool getValue(JsonValue::Union &data, T &value,
+                         std::error_code &ec) {
+        static_assert(!std::is_same_v<T, T>,
+                      "the given type contains members that are not reflected, "
+                      "please add REFLECT macro to it");
+        return false;
+    }
+};
+
+struct JsonEncoder {
+    std::string json;
+
+    void put(char c) {
+        json.push_back(c);
+    }
+
+    void put(char const *s, std::size_t len) {
+        json.append(s, len);
+    }
+
+    void putLiterialString(char const *name) {
+        put('"');
+        json.append(name);
+        put('"');
+    }
+
+    void putString(char const *name, std::size_t len) {
+        put('"');
+        for (char const *it = name, *ep = name + len; it != ep; ++it) {
+            char c = *it;
+            switch (c) {
+            case '\n': put("\\n", 2); break;
+            case '\r': put("\\r", 2); break;
+            case '\t': put("\\t", 2); break;
+            case '\\': put("\\\\", 2); break;
+            case '\0': put("\\0", 2); break;
+            case '"':  put("\\\"", 2); break;
+            default:
+                if ((c >= 0 && c < 0x20) || c == 0x7F) {
+                    put("\\u00", 4);
+                    auto u = static_cast<unsigned char>(c);
+                    put("0123456789abcdef"[u >> 4]);
+                    put("0123456789abcdef"[u & 0x0F]);
+                } else {
+                    put(c);
+                }
+                break;
+            }
+        }
+        put('"');
+    }
+
+    template <class T>
+    void putArithmetic(T const &value) {
+        json.append(std::to_string(value));
+    }
+
+    template <class T>
+    void putValue(T const &value) {
+        JsonTrait<T>::putValue(this, value);
+    }
+};
+enum class JsonError : int {
+    Success = 0,
+    NullEntry,
+    TypeMismatch,
+    UnexpectedEnd,
+    UnexpectedToken,
+    NonTerminatedString,
+    InvalidUTF16String,
+    DictKeyNotString,
+    InvalidNumberFormat,
+    InvalidVariantType,
+    NotImplemented,
+};
+
+inline std::error_category const &jsonCategory() {
+    static struct : std::error_category {
+        char const *name() const noexcept override {
+            return "json";
+        }
+
+        std::string message(int e) const override {
+            using namespace std::string_literals;
+            switch (static_cast<JsonError>(e)) {
+            case JsonError::Success:         return "success"s;
+            case JsonError::NullEntry:       return "no such entry"s;
+            case JsonError::TypeMismatch:    return "type mismatch"s;
+            case JsonError::UnexpectedEnd:   return "unexpected end"s;
+            case JsonError::UnexpectedToken: return "unexpected token"s;
+            case JsonError::NonTerminatedString:
+                return "non-terminated string"s;
+            case JsonError::InvalidUTF16String: return "invalid utf-16 string"s;
+            case JsonError::DictKeyNotString:   return "dict key must be string"s;
+            case JsonError::InvalidNumberFormat:
+                return "invalid number format"s;
+            case JsonError::InvalidVariantType:
+                return "invalid variant type"s;
+            case JsonError::NotImplemented: return "not implemented"s;
+            default:                        return "unknown error"s;
+            }
+        }
+    } instance;
+
+    return instance;
+}
+
+inline std::error_code make_error_code(JsonError e) {
+    return std::error_code(static_cast<int>(e), jsonCategory());
+}
+
+inline JsonValue::Ptr jsonParse(std::string_view &json, std::error_code &ec) {
+    using namespace std::string_view_literals;
+    JsonValue::Ptr current;
+    auto nonempty = json.find_first_not_of(" \t\n\r\0"sv);
+    if (nonempty == json.npos) {
+        ec = make_error_code(JsonError::UnexpectedEnd);
+        return nullptr;
+    }
+    json.remove_prefix(nonempty);
+    char c = json.front();
+    if (c == '"') {
+        json.remove_prefix(1);
+        std::string str;
+        unsigned int phase = 0;
+        unsigned int lasthex = 0;
+        unsigned int hex = 0;
+        std::size_t i;
+        auto unsignedExtent = [](unsigned int x) {
+            return static_cast<char>(static_cast<unsigned char>(x));
+        };
+        for (i = 0;; ++i) {
+            if (i == json.size()) {
+                ec = make_error_code(JsonError::NonTerminatedString);
+                return nullptr;
+            }
+            char c = json[i];
+            if (phase == 0) {
+                if (c == '"') {
+                    break;
+                } else if (c == '\\') {
+                    phase = 1;
+                    continue;
+                }
+            } else if (phase == 1) {
+                if (c == 'u') {
+                    phase = 2;
+                    hex = 0;
+                    lasthex = false;
+                    continue;
+                } else if (c == 'n') {
+                    c = '\n';
+                } else if (c == 't') {
+                    c = '\t';
+                } else if (c == '\\') {
+                    c = '\\';
+                } else if (c == '0') {
+                    c = '\0';
+                } else if (c == 'r') {
+                    c = '\r';
+                } else if (c == 'v') {
+                    c = '\v';
+                } else if (c == 'f') {
+                    c = '\f';
+                } else if (c == 'b') {
+                    c = '\b';
+                } else if (c == 'a') {
+                    c = '\a';
+                }
+                phase = 0;
+            } else {
+                hex <<= 4;
+                if ('0' <= c && c <= '9') {
+                    hex |= static_cast<unsigned int>(c - '0');
+                } else if ('a' <= c && c <= 'f') {
+                    hex |= static_cast<unsigned int>(c - 'a' + 10);
+                } else if ('A' <= c && c <= 'F') {
+                    hex |= static_cast<unsigned int>(c - 'A' + 10);
+                }
+                if (phase == 5) {
+                    if (0xD800 <= hex && hex < 0xDC00) {
+                        if (!lasthex) {
+                            phase = 2;
+                            lasthex = hex;
+                            hex = 0;
+                            continue;
+                        } else {
+                            ec = make_error_code(JsonError::InvalidUTF16String);
+                            return nullptr;
+                        }
+                    } else if (0xDC00 <= hex && hex < 0xE000) {
+                        if (lasthex) {
+                            hex = 0x10000 + (lasthex - 0xD800) * 0x400 +
+                                  (hex - 0xDC00);
+                            lasthex = false;
+                            phase = 0;
+                        } else {
+                            ec = make_error_code(JsonError::InvalidUTF16String);
+                            return nullptr;
+                        }
+                    }
+                    if (hex <= 0x7F) {
+                        str.push_back(unsignedExtent(hex));
+                    } else if (hex <= 0x7FF) {
+                        str.push_back(unsignedExtent(0xC0 | (hex >> 6)));
+                        str.push_back(unsignedExtent(0x80 | (hex & 0x3F)));
+                    } else if (hex <= 0xFFFF) {
+                        str.push_back(unsignedExtent(0xE0 | (hex >> 12)));
+                        str.push_back(
+                            unsignedExtent(0x80 | ((hex >> 6) & 0x3F)));
+                        str.push_back(unsignedExtent(0x80 | (hex & 0x3F)));
+                    } else if (hex <= 0x10FFFF) {
+                        str.push_back(unsignedExtent(0xF0 | (hex >> 18)));
+                        str.push_back(
+                            unsignedExtent(0x80 | ((hex >> 12) & 0x3F)));
+                        str.push_back(
+                            unsignedExtent(0x80 | ((hex >> 6) & 0x3F)));
+                        str.push_back(unsignedExtent(0x80 | (hex & 0x3F)));
+                    } else {
+                        ec = make_error_code(JsonError::InvalidUTF16String);
+                        return nullptr;
+                    }
+                    phase = 0;
+                } else {
+                    ++phase;
+                }
+                continue;
+            }
+            str.push_back(c);
+        }
+        json.remove_prefix(i + 1);
+        current = JsonValue::make<JsonValue::String>(std::move(str));
+    } else if (c == '{') {
+        json.remove_prefix(1);
+        std::map<std::string, JsonValue::Ptr> dict;
+        for (;;) {
+            nonempty = json.find_first_not_of(" \t\n\r\0"sv);
+            if (nonempty == json.npos) {
+                ec = make_error_code(JsonError::UnexpectedEnd);
+                return nullptr;
+            }
+            json.remove_prefix(nonempty);
+            if (json.front() == '}') {
+                json.remove_prefix(1);
+                break;
+            } else if (json.front() == ',') {
+                json.remove_prefix(1);
+                continue;
+            } else {
+                auto key = jsonParse(json, ec);
+                if (!key) {
+                    return nullptr;
+                }
+                std::string keyString;
+                if (auto p = std::get_if<JsonValue::String>(&key->inner)) {
+                    keyString = std::move(*p);
+                } else {
+                    ec = make_error_code(JsonError::DictKeyNotString);
+                    return nullptr;
+                }
+                auto nonempty = json.find_first_not_of(" \t\n\r\0"sv);
+                if (nonempty == json.npos) {
+                    ec = make_error_code(JsonError::UnexpectedEnd);
+                    return nullptr;
+                }
+                json.remove_prefix(nonempty);
+                if (json.front() != ':') {
+                    ec = make_error_code(JsonError::UnexpectedToken);
+                    return nullptr;
+                }
+                json.remove_prefix(1);
+                auto value = jsonParse(json, ec);
+                if (!value) {
+                    return nullptr;
+                }
+                dict.emplace(std::move(keyString), std::move(value));
+            }
+        }
+        current = JsonValue::make<JsonValue::Dict>(std::move(dict));
+    } else if (c == '[') {
+        json.remove_prefix(1);
+        std::vector<JsonValue::Ptr> array;
+        for (;;) {
+            auto nonempty = json.find_first_not_of(" \t\n\r\0"sv);
+            if (nonempty == json.npos) {
+                ec = make_error_code(JsonError::UnexpectedEnd);
+                return nullptr;
+            }
+            json.remove_prefix(nonempty);
+            if (json.front() == ']') {
+                json.remove_prefix(1);
+                break;
+            } else if (json.front() == ',') {
+                json.remove_prefix(1);
+                continue;
+            } else {
+                auto value = jsonParse(json, ec);
+                if (!value) {
+                    return nullptr;
+                }
+                array.emplace_back(std::move(value));
+            }
+        }
+        current = JsonValue::make<JsonValue::Array>(std::move(array));
+    } else if (('0' <= c && c <= '9') || c == '.' || c == '-' || c == '+') {
+        auto end = json.find_first_of(",]}"sv);
+        if (end == json.npos) {
+            end = json.size();
+        }
+        auto str = std::string(json.data(), end);
+        if (str.find('.') != str.npos) {
+            double value;
+            try {
+                value = std::stod(str);
+            } catch (std::exception const &) {
+                ec = make_error_code(JsonError::InvalidNumberFormat);
+                return nullptr;
+            }
+            current = JsonValue::make<JsonValue::Real>(value);
+        } else {
+            std::int64_t value;
+            try {
+                value = std::stoll(str);
+            } catch (std::exception const &) {
+                ec = make_error_code(JsonError::InvalidNumberFormat);
+                return nullptr;
+            }
+            current = JsonValue::make<JsonValue::Integer>(value);
+        }
+        json.remove_prefix(end);
+    } else if (c == 't') {
+        if (!json.starts_with("true"sv)) {
+            ec = make_error_code(JsonError::UnexpectedToken);
+            return nullptr;
+        }
+        current = JsonValue::make<JsonValue::Boolean>(true);
+        json.remove_prefix(4);
+    } else if (c == 'f') {
+        if (!json.starts_with("false"sv)) {
+            ec = make_error_code(JsonError::UnexpectedToken);
+            return nullptr;
+        }
+        current = JsonValue::make<JsonValue::Boolean>(false);
+        json.remove_prefix(5);
+    } else if (c == 'n') {
+        if (!json.starts_with("null"sv)) {
+            ec = make_error_code(JsonError::UnexpectedToken);
+            return nullptr;
+        }
+        current = JsonValue::make<JsonValue::Null>(JsonValue::Null());
+        json.remove_prefix(4);
+    } else {
+        ec = make_error_code(JsonError::UnexpectedToken);
+        return nullptr;
+    }
+    return current;
+}
+
+struct ReflectorJsonEncode {
+    JsonEncoder *encoder;
+    bool comma = false;
+
+    template <class T>
+    void operator()(char const *name, T &value) {
+        if (!comma) {
+            comma = true;
+        } else {
+            encoder->put(',');
+        }
+        encoder->putLiterialString(name);
+        encoder->put(':');
+        encoder->putValue(value);
+    }
+};
+
+struct ReflectorJsonDecode {
+    JsonValue::Dict *currentDict;
+    std::error_code ec{};
+    bool failed = false;
+
+    template <class T>
+    void operator()(char const *name, T &value) {
+        if (failed) {
+            return;
+        }
+        auto it = currentDict->find(name);
+        if (it == currentDict->end()) {
+            JsonValue::Union nullData;
+            failed = !JsonTrait<T>::getValue(nullData, value, ec);
+        } else {
+            failed = !JsonTrait<T>::getValue(it->second->inner, value, ec);
+        }
+    }
+
+    static void typeMismatch(char const *expect, JsonValue::Union const &inner,
+                             std::error_code &ec) {
+        if (std::holds_alternative<JsonValue::Null>(inner)) {
+#if DEBUG_LEVEL
+            std::cerr << std::string("json_decode no such entry (expect ") +
+                             expect + ", got null)\n";
+#endif
+            ec = make_error_code(JsonError::NullEntry);
+        } else {
+            char const *got = "???";
+            std::visit(
+                [&](auto &&arg) {
+                    using T = std::decay_t<decltype(arg)>;
+                    if constexpr (std::is_same_v<T, JsonValue::Null>) {
+                        got = "null";
+                    } else if constexpr (std::is_same_v<T, JsonValue::String>) {
+                        got = "string";
+                    } else if constexpr (std::is_same_v<T, JsonValue::Dict>) {
+                        got = "dict";
+                    } else if constexpr (std::is_same_v<T, JsonValue::Array>) {
+                        got = "array";
+                    } else if constexpr (std::is_same_v<T,
+                                                        JsonValue::Integer>) {
+                        got = "integer";
+                    } else if constexpr (std::is_same_v<T, JsonValue::Real>) {
+                        got = "real";
+                    } else if constexpr (std::is_same_v<T,
+                                                        JsonValue::Boolean>) {
+                        got = "boolean";
+                    }
+                },
+                inner);
+#if DEBUG_LEVEL
+            std::cerr << std::string("json_decode type mismatch (expect ") +
+                             expect + ", got " + got + ")\n";
+#endif
+            ec = make_error_code(JsonError::TypeMismatch);
+        }
+    }
+};
+
+struct JsonTraitPointerLike {
+    template <class T>
+    static void putValue(JsonEncoder *encoder, T const &value) {
+        if (value == nullptr) {
+            encoder->put("null", 4);
+        } else {
+            JsonTrait<typename std::pointer_traits<T>::element_type>::putValue(
+                encoder, *value);
+        }
+    }
+
+    template <class T>
+    static bool getValue(JsonValue::Union const &inner, T &value,
+                         std::error_code &ec) {
+        JsonTrait<typename std::pointer_traits<T>::element_type>::getValue(
+            inner, *value, ec);
+        return !ec;
+    }
+};
+
+struct JsonTraitArrayLike {
+    template <class T>
+    static void putValue(JsonEncoder *encoder, T const &value) {
+        auto bit = value.begin();
+        auto eit = value.end();
+        encoder->put('[');
+        bool comma = false;
+        for (auto it = bit; it != eit; ++it) {
+            if (!comma) {
+                comma = true;
+            } else {
+                encoder->put(',');
+            }
+            JsonTrait<typename T::value_type>::putValue(encoder, *it);
+        }
+        encoder->put(']');
+    }
+
+    template <class T>
+    static bool getValue(JsonValue::Union &data, T &value,
+                         std::error_code &ec) {
+        if (auto p = std::get_if<JsonValue::Array>(&data)) {
+            auto bit = p->begin();
+            auto eit = p->end();
+            for (auto it = bit; it != eit; ++it) {
+                auto &element = value.emplace_back();
+                if (!JsonTrait<typename T::value_type>::getValue((*it)->inner,
+                                                                 element, ec)) {
+                    return false;
+                }
+            }
+            return true;
+        } else {
+            ReflectorJsonDecode::typeMismatch("array", data, ec);
+            return false;
+        }
+    }
+};
+
+struct JsonTraitDictLike {
+    template <class T>
+    static void putValue(JsonEncoder *encoder, T const &value) {
+        auto bit = value.begin();
+        auto eit = value.end();
+        encoder->put('{');
+        bool comma = false;
+        for (auto it = bit; it != eit; ++it) {
+            if (!comma) {
+                comma = true;
+            } else {
+                encoder->put(',');
+            }
+            encoder->putString(it->first.data(), it->first.size());
+            encoder->put(':');
+            JsonTrait<typename T::mapped_type>::putValue(encoder, it->second);
+        }
+        encoder->put('}');
+    }
+
+    template <class T>
+    static bool getValue(JsonValue::Union &data, T &value,
+                         std::error_code &ec) {
+        if (auto p = std::get_if<JsonValue::Dict>(&data)) {
+            auto bit = p->begin();
+            auto eit = p->end();
+            for (auto it = bit; it != eit; ++it) {
+                auto &element = value.try_emplace(it->first).first->second;
+                if (!JsonTrait<typename T::mapped_type>::getValue(
+                        it->second->inner, element, ec)) {
+                    return false;
+                }
+            }
+            return true;
+        } else {
+            ReflectorJsonDecode::typeMismatch("dict", data, ec);
+            return false;
+        }
+    }
+};
+
+struct JsonTraitStringLike {
+    template <class T>
+    static void putValue(JsonEncoder *encoder, T const &value) {
+        encoder->putString(value.data(), value.size());
+    }
+
+    template <class T>
+    static bool getValue(JsonValue::Union &data, T &value,
+                         std::error_code &ec) {
+        if (auto p = std::get_if<JsonValue::String>(&data)) {
+            value = std::move(*p);
+            return true;
+        } else {
+            ReflectorJsonDecode::typeMismatch("string", data, ec);
+            return false;
+        }
+    }
+};
+
+struct JsonTraitNullLike {
+    template <class T>
+    static void putValue(JsonEncoder *encoder, T const &value) {
+        encoder->put("null", 4);
+    }
+
+    template <class T>
+    static bool getValue(JsonValue::Union &data, T &value,
+                         std::error_code &ec) {
+        if (std::get_if<JsonValue::Null>(&data)) {
+            return true;
+        } else {
+            ReflectorJsonDecode::typeMismatch("null", data, ec);
+            return false;
+        }
+    }
+};
+
+struct JsonTraitOptionalLike {
+    template <class T>
+    static void putValue(JsonEncoder *encoder, T const &value) {
+        if (value) {
+            encoder->putValue(*value);
+        } else {
+            encoder->put("null", 4);
+        }
+    }
+
+    template <class T>
+    static bool getValue(JsonValue::Union &data, T &value,
+                         std::error_code &ec) {
+        if (std::get_if<JsonValue::Null>(&data)) {
+            value = std::nullopt;
+            return true;
+        } else {
+            return JsonTrait<typename T::value_type>::getValue(
+                data, value.emplace(), ec);
+        }
+    }
+};
+
+struct JsonTraitBooleanLike {
+    template <class T>
+    static void putValue(JsonEncoder *encoder, T const &value) {
+        if (value) {
+            encoder->put("true", 4);
+        } else {
+            encoder->put("false", 5);
+        }
+    }
+
+    template <class T>
+    static bool getValue(JsonValue::Union &data, T &value,
+                         std::error_code &ec) {
+        if (auto p = std::get_if<JsonValue::Boolean>(&data)) {
+            value = *p;
+            return true;
+        } else {
+            ReflectorJsonDecode::typeMismatch("boolean", data, ec);
+            return false;
+        }
+    }
+};
+
+struct JsonTraitArithmeticLike {
+    template <class T>
+    static void putValue(JsonEncoder *encoder, T const &value) {
+        encoder->putArithmetic(value);
+    }
+
+    template <class T>
+    static bool getValue(JsonValue::Union &data, T &value,
+                         std::error_code &ec) {
+        if (auto p = std::get_if<JsonValue::Integer>(&data)) {
+            value = static_cast<T>(*p);
+            return true;
+        } else if (auto p = std::get_if<JsonValue::Real>(&data)) {
+            value = static_cast<T>(*p);
+            return true;
+        } else {
+            ReflectorJsonDecode::typeMismatch("integer or real", data, ec);
+            return false;
+        }
+    }
+};
+
+struct JsonTraitVariantLike {
+    template <class T>
+    static void putValue(JsonEncoder *encoder, T const &value) {
+        std::visit([&](auto const &arg) {
+            using Arg = std::decay_t<decltype(arg)>;
+            encoder->put('{');
+            encoder->putLiterialString("type");
+            encoder->put(':');
+            encoder->putLiterialString(Arg::name);
+            encoder->put(',');
+            encoder->putLiterialString("object");
+            encoder->put(':');
+            encoder->putValue(arg);
+            encoder->put('}');
+        }, value);
+    }
+
+    template <class T, std::size_t ...Is>
+    static bool getValueImpl(JsonValue::String const &name,
+                             JsonValue::Union &object, T &value,
+                             std::error_code &ec, std::index_sequence<Is...>) {
+        int ret = 0;
+        (void)((name == std::variant_alternative_t<Is, T>::name ?
+            (ret = (JsonTrait<std::variant_alternative_t<Is, T>>
+             ::getValue(object, value.template emplace<Is>(), ec) ? 2 : 1), true) :
+            false) || ...);
+        switch (ret) {
+            case 2: return true;
+            case 1: return false;
+            default:
+                ec = make_error_code(JsonError::InvalidVariantType);
+                return false;
+        }
+    }
+
+    template <class T>
+    static bool getValue(JsonValue::Union &data, T &value,
+                         std::error_code &ec) {
+        if (auto p = std::get_if<JsonValue::Dict>(&data)) {
+            if (auto type = p->find("type"); type == p->end()) {
+                ec = make_error_code(JsonError::InvalidVariantType);
+                return false;
+            } else if (auto object = p->find("object"); object == p->end()) {
+                ec = make_error_code(JsonError::InvalidVariantType);
+                return false;
+            } else if (auto p = std::get_if<JsonValue::String>(&type->second->inner)) {
+                if (!getValueImpl(*p, object->second->inner, value, ec,
+                                  std::make_index_sequence<std::variant_size_v<T>>())) {
+                    return false;
+                }
+                return true;
+            } else {
+                ec = make_error_code(JsonError::InvalidVariantType);
+                return false;
+            }
+        } else {
+            ReflectorJsonDecode::typeMismatch("object", data, ec);
+            return false;
+        }
+    }
+};
+
+struct JsonTraitJsonValueLike {
+    template <class T>
+    static void putValue(JsonEncoder *encoder, T const &value) {
+        encoder->putValue(value.inner);
+    }
+
+    template <class T>
+    static bool getValue(JsonValue::Union &data, JsonValue &value,
+                         std::error_code &ec) {
+        value.inner = std::move(data);
+        return true;
+    }
+};
+
+struct JsonTraitObjectLike {
+    template <class T>
+    static void putValue(JsonEncoder *encoder, T const &value) {
+        ReflectorJsonEncode reflector(encoder);
+        encoder->put('{');
+        reflect_members(reflector, const_cast<T &>(value));
+        encoder->put('}');
+    }
+
+    template <class T>
+    static bool getValue(JsonValue::Union &data, T &value,
+                         std::error_code &ec) {
+        if (auto p = std::get_if<JsonValue::Dict>(&data)) {
+            ReflectorJsonDecode reflector(p);
+            reflect_members(reflector, value);
+            if (reflector.failed) {
+                ec = reflector.ec;
+                return false;
+            }
+            return true;
+        } else {
+            ReflectorJsonDecode::typeMismatch("object", data, ec);
+            return false;
+        }
+    }
+};
+
+struct JsonTraitWrapperLike {
+    template <class T>
+    static void putValue(JsonEncoder *encoder, T const &value) {
+        return JsonTrait<typename T::value_type>::putValue(encoder, *value);
+    }
+
+    template <class T>
+    static bool getValue(JsonValue::Union &data, T &value,
+                         std::error_code &ec) {
+        return JsonTrait<typename T::value_type>::getValue(data, *value, ec);
+    }
+};
+
+template <>
+struct JsonTrait<JsonValue> {
+    template <class T>
+    static void putValue(JsonEncoder *encoder, T const &value) {
+        std::visit([&]<class U>(
+                       U const &arg) { JsonTrait<U>::getValue(encoder, arg); },
+                   value);
+    }
+
+    template <class T>
+    static bool getValue(JsonValue::Union &data, JsonValue &value,
+                         std::error_code &ec) {
+        value.inner = std::move(data);
+        return true;
+    }
+};
+
+template <class T>
+struct JsonTrait<T *> : JsonTraitPointerLike {};
+
+template <class T, class Deleter>
+struct JsonTrait<std::unique_ptr<T, Deleter>> : JsonTraitPointerLike {};
+
+template <class T>
+struct JsonTrait<std::shared_ptr<T>> : JsonTraitPointerLike {};
+
+template <class T, std::size_t N>
+struct JsonTrait<std::array<T, N>> : JsonTraitArrayLike {};
+
+template <class T, class Alloc>
+struct JsonTrait<std::vector<T, Alloc>> : JsonTraitArrayLike {};
+
+template <class K, class V, class Cmp, class Alloc>
+struct JsonTrait<std::map<K, V, Cmp, Alloc>> : JsonTraitDictLike {};
+
+template <class K, class V, class Hash, class Eq, class Alloc>
+struct JsonTrait<std::unordered_map<K, V, Hash, Eq, Alloc>>
+    : JsonTraitDictLike {};
+
+template <class Traits, class Alloc>
+struct JsonTrait<std::basic_string<char, Traits, Alloc>> : JsonTraitStringLike {
+};
+
+template <class Traits>
+struct JsonTrait<std::basic_string_view<char, Traits>> : JsonTraitStringLike {};
+
+template <class... Ts>
+struct JsonTrait<std::variant<Ts...>> : JsonTraitVariantLike {};
+
+template <class T>
+struct JsonTrait<std::optional<T>> : JsonTraitOptionalLike {};
+
+template <>
+struct JsonTrait<std::nullptr_t> : JsonTraitNullLike {};
+
+template <>
+struct JsonTrait<std::nullopt_t> : JsonTraitNullLike {};
+
+template <>
+struct JsonTrait<std::monostate> : JsonTraitNullLike {};
+
+template <>
+struct JsonTrait<bool> : JsonTraitBooleanLike {};
+
+/* template <class T> */
+/* struct JsonTrait<NoDefault<T>> : JsonTraitWrapperLike {}; */
+
+template <class T>
+struct JsonTrait<T, std::enable_if_t<std::is_arithmetic_v<T>>>
+    : JsonTraitArithmeticLike {};
+
+template <class Reflector, class T>
+inline std::void_t<
+    decltype(std::declval<T &>().REFLECT__MEMBERS(std::declval<Reflector &>()))>
+reflect_members(Reflector &reflector, T &value) {
+    value.REFLECT__MEMBERS(reflector);
+}
+
+template <class Reflector, class T,
+          class = std::void_t<decltype(REFLECT__MEMBERS(
+              std::declval<T &>(), std::declval<Reflector &>()))>>
+inline void reflect_members(Reflector &reflector, T &value) {
+    value.REFLECT__MEMBERS(value, reflector);
+}
+
+template <class T>
+struct JsonTrait<T, JsonValue> : JsonTraitJsonValueLike {};
+
+template <class T>
+struct JsonTrait<
+    T, std::void_t<decltype(reflect_members(
+           std::declval<ReflectorJsonEncode &>(), std::declval<T &>()))>>
+    : JsonTraitObjectLike {};
+
+template <class T>
+inline std::string json_encode(T const &value) {
+    JsonEncoder encoder;
+    encoder.putValue(value);
+    return encoder.json;
+}
+
+template <class T>
+inline bool json_decode(JsonValue &root, T &value, std::error_code &ec) {
+    return JsonTrait<T>::getValue(root.inner, value, ec);
+}
+
+template <class T>
+inline bool json_decode(std::string_view json, T &value, std::error_code &ec) {
+    auto root = jsonParse(json, ec);
+    if (!root) {
+        return false;
+    }
+    return json_decode(*root, value, ec);
+}
+
+template <class T>
+inline Expected<T> json_decode(JsonValue &root) {
+    T value{};
+    std::error_code ec;
+    if (!json_decode(root, value, ec)) [[unlikely]] {
+        return ec;
+    }
+    return std::move(value);
+}
+
+template <class T>
+inline Expected<T> json_decode(std::string_view json) {
+    T value{};
+    std::error_code ec;
+    if (!json_decode(json, value, ec)) [[unlikely]] {
+        return ec;
+    }
+    return std::move(value);
+}
+
+} // namespace co_async
+
+
+
+
+
+
+
+
+
+
+
+
+#include <hashlib/hashlib.hpp>
+
+namespace co_async {
+
+// 小彭老师带你用 C++ 实现 WebSocket 协议
+// WebSocket 是为了解决 HTTP 协议的一些缺陷而提出的
+// 过去，HTTP 只能客户端单向地往服务端发出请求，服务端被动地返回响应
+// 要获取服务端的动态数据，只能通过轮询或长轮询的形式（参见上一期视频）
+// 在聊天室这种少量人员的场景中，轮询还扛得住，但在实时音视频，直播领域，HTTP 轮询的延迟就太高了
+// 而 WebSocket 是一种双向通信协议，建立连接后，服务端和客户端都能主动向对方发送或接收数据
+// WebSocket 面向二进制字节流，类似于 TCP，比基于文本传输数据的 HTTP 协议更高效
+// 主流浏览器都提供 WebSocket 的 API，可以实现浏览器和服务器的双向实时通信
+// 我们这一期视频主要来实现 C++ 的服务器端，要求能够与浏览器中的 JS 建立 WebSocket 连接
+// 如果时间来得及，我们希望利用这个 WebSocket 服务器实现实时语音通话
+
+inline String websocketGenerateNonce() {
+    uint32_t seed = getSeedByTime();
+    uint8_t buf[16];
+    for (size_t i = 0; i != 16; ++i) {
+        seed = wangsHash(seed);
+        buf[i] = static_cast<uint8_t>(seed & 0xFF);
+    }
+    return base64::encode_into<String>(buf, buf + 16);
+}
+
+inline String websocketSecretHash(String userKey) {
+    // websocket 官方要求的神秘仪式
+    SHA1 sha1;
+    String inKey = userKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    sha1.add(inKey.data(), inKey.size());
+    uint8_t buf[SHA1::HashBytes];
+    sha1.getHash(buf);
+    return base64::encode_into<String>(buf, buf + SHA1::HashBytes);
+}
+
+inline Task<Expected<bool>> httpUpgradeToWebSocket(HTTPServer::IO &io) {
+    if (io.request.headers.get("upgrade") != "websocket") {
+        co_return false;
+    }
+    // 是 ws:// 请求
+    auto wsKey = io.request.headers.get("sec-websocket-key");
+    if (!wsKey) {
+        co_await co_await HTTPServerUtils::make_error_response(io, 400);
+        co_return true;
+    }
+    auto wsNewKey = websocketSecretHash(*wsKey);
+    HTTPResponse res{
+        .status = 101,
+        .headers =
+        {
+            {"connection", "Upgrade"},
+            {"upgrade", "websocket"},
+            {"sec-websocket-accept", wsNewKey},
+        },
+    };
+    co_await co_await io.response(res, "");
+    co_return true;
+}
+
+struct WebSocketPacket {
+    enum Opcode : uint8_t {
+        kOpcodeContinue = 0,
+        kOpcodeText = 1,
+        kOpcodeBinary = 2,
+        kOpcodeClose = 8,
+        kOpcodePing = 9,
+        kOpcodePong = 10,
+    } opcode;
+    std::string content;
+
+    REFLECT(opcode, content);
+};
+
+inline Task<Expected<WebSocketPacket>> wsRecvPacket(BorrowedStream &ws) {
+    WebSocketPacket packet;
+    packet.opcode = WebSocketPacket::kOpcodeContinue;
+    bool fin;
+    do {
+        auto head = co_await co_await ws.getn(2);
+        uint8_t head0 = static_cast<uint8_t>(head[0]);
+        uint8_t head1 = static_cast<uint8_t>(head[1]);
+        fin = (head0 & 0x80) != 0;
+        auto new_opcode = static_cast<WebSocketPacket::Opcode>(head0 & 0x0F);
+        if (new_opcode != WebSocketPacket::kOpcodeContinue) {
+            packet.opcode = new_opcode;
+        }
+        bool masked = (head1 & 0x80) != 0;
+        uint8_t payloadLen8 = head1 & 0x7F;
+        size_t payloadLen;
+        if (packet.opcode >= 8 && packet.opcode <= 10 && payloadLen8 >= 0x7E) [[unlikely]] {
+            co_return std::errc::protocol_error;
+        }
+        if (payloadLen8 == 0x7E) {
+            auto payloadLen16 = byteswap_if_little(co_await co_await ws.getstruct<uint16_t>());
+            payloadLen = static_cast<size_t>(payloadLen16);
+        } else if (payloadLen8 == 0x7F) {
+            auto payloadLen64 = byteswap_if_little(co_await co_await ws.getstruct<uint64_t>());
+            if constexpr (sizeof(uint64_t) > sizeof(size_t)) {
+                if (payloadLen64 > std::numeric_limits<size_t>::max()) {
+                    co_return std::errc::not_enough_memory;
+                }
+            }
+            payloadLen = static_cast<size_t>(payloadLen64);
+        } else {
+            payloadLen = static_cast<size_t>(payloadLen8);
+        }
+        std::string mask;
+        if (masked) {
+            mask = co_await co_await ws.getn(4);
+        }
+        auto data = co_await co_await ws.getn(payloadLen);
+        if (masked) {
+            for (size_t i = 0; i != data.size(); ++i) {
+                data[i] ^= mask[i % 4];
+            }
+        }
+        packet.content += data;
+    } while (!fin);
+    co_return std::move(packet);
+}
+
+inline Task<Expected<>> wsSendPacket(BorrowedStream &ws, WebSocketPacket packet, uint32_t mask = 0) {
+    const bool fin = true;
+    bool masked = mask != 0;
+    uint8_t payloadLen8 = 0;
+    if (packet.content.size() < 0x7E) {
+        payloadLen8 = static_cast<uint8_t>(packet.content.size());
+    } else if (packet.content.size() <= 0xFFFF) {
+        payloadLen8 = 0x7E;
+    } else {
+        payloadLen8 = 0x7F;
+    }
+    uint8_t head0 = (fin ? 1 : 0) << 7 | static_cast<uint8_t>(packet.opcode);
+    uint8_t head1 = (masked ? 1 : 0) << 7 | payloadLen8;
+    char head[2];
+    head[0] = static_cast<uint8_t>(head0);
+    head[1] = static_cast<uint8_t>(head1);
+    co_await co_await ws.write(head);
+    if (packet.content.size() > 0x7E) {
+        if (packet.content.size() <= 0xFFFF) {
+            auto payloadLen16 = static_cast<uint16_t>(packet.content.size());
+            co_await co_await ws.putstruct(byteswap_if_little(payloadLen16));
+        } else {
+            auto payloadLen64 = static_cast<uint64_t>(packet.content.size());
+            co_await co_await ws.putstruct(byteswap_if_little(payloadLen64));
+        }
+    }
+    if (masked) {
+        char mask_buf[4];
+        mask_buf[0] = mask >> 24;
+        mask_buf[1] = (mask >> 16) & 0xFF;
+        mask_buf[2] = (mask >> 8) & 0xFF;
+        mask_buf[3] = mask & 0xFF;
+        co_await co_await ws.write(mask_buf);
+        for (size_t i = 0; i != packet.content.size(); ++i) {
+            packet.content[i] ^= mask_buf[i % 4];
+        }
+    }
+    co_await co_await ws.write(packet.content);
+    co_await co_await ws.flush();
+    co_return {};
+}
+
+struct WebSocket {
+    BorrowedStream &sock;
+    std::function<Task<Expected<>>(std::string const &)> mOnMessage;
+    std::function<Task<Expected<>>()> mOnClose;
+    std::function<Task<Expected<>>(std::chrono::steady_clock::duration)> mOnPong;
+    bool mHalfClosed = false;
+    bool mWaitingPong = true;
+    std::chrono::steady_clock::time_point mLastPingTime{};
+
+    WebSocket(WebSocket &&) = default;
+
+    explicit WebSocket(BorrowedStream &sock) : sock(sock) {
+    }
+
+    bool is_closing() const noexcept {
+        return mHalfClosed;
+    }
+
+    void on_message(std::function<Task<Expected<>>(std::string const &)> onMessage) {
+        mOnMessage = std::move(onMessage);
+    }
+
+    void on_close(std::function<Task<Expected<>>()> onClose) {
+        mOnClose = std::move(onClose);
+    }
+
+    void on_pong(std::function<Task<Expected<>>(std::chrono::steady_clock::duration)> onPong) {
+        mOnPong = std::move(onPong);
+    }
+
+    Task<Expected<>> send(std::string text) {
+        if (mHalfClosed) [[unlikely]] {
+            co_return std::errc::broken_pipe;
+        }
+        co_return co_await wsSendPacket(sock, WebSocketPacket{
+            .opcode = WebSocketPacket::kOpcodeText,
+            .content = text,
+        });
+    }
+
+    Task<Expected<>> close(uint16_t code = 1000) {
+        std::string content;
+        code = byteswap_if_little(code);
+        content.resize(sizeof(code));
+        std::memcpy(content.data(), &code, sizeof(code));
+        mHalfClosed = true;
+        co_return co_await wsSendPacket(sock, WebSocketPacket{
+            .opcode = WebSocketPacket::kOpcodeClose,
+            .content = content,
+        });
+    }
+
+    Task<Expected<>> sendPing() {
+        mLastPingTime = std::chrono::steady_clock::now();
+        // debug(), "主动ping";
+        co_return co_await wsSendPacket(sock, WebSocketPacket{
+            .opcode = WebSocketPacket::kOpcodePing,
+            .content = {},
+        });
+    }
+
+    Task<Expected<>> start(std::chrono::steady_clock::duration pingPongTimeout = std::chrono::seconds(5)) {
+        while (true) {
+            auto maybePacket = co_await co_timeout(wsRecvPacket(sock), pingPongTimeout);
+            if (maybePacket == std::errc::stream_timeout) {
+                if (mWaitingPong) {
+                    break;
+                }
+                co_await co_await sendPing();
+                mWaitingPong = true;
+                continue;
+            }
+            mWaitingPong = false;
+            if (maybePacket == eofError()) {
+                break;
+            }
+            auto packet = co_await std::move(maybePacket);
+            if (packet.opcode == packet.kOpcodeText || packet.opcode == packet.kOpcodeBinary) {
+                if (mOnMessage) {
+                    co_await co_await mOnMessage(packet.content);
+                }
+            } else if (packet.opcode == packet.kOpcodePing) {
+                // debug(), "收到ping";
+                packet.opcode = packet.kOpcodePong;
+                co_await co_await wsSendPacket(sock, packet);
+            } else if (packet.opcode == packet.kOpcodePong) {
+                auto now = std::chrono::steady_clock::now();
+                if (mOnPong && mLastPingTime.time_since_epoch().count() != 0) {
+                    auto dt = now - mLastPingTime;
+                    co_await co_await mOnPong(dt);
+                    // debug(), "网络延迟:", dt;
+                }
+                // debug(), "收到pong";
+            } else if (packet.opcode == packet.kOpcodeClose) {
+                // debug(), "收到关闭请求";
+                if (mOnClose) {
+                    co_await co_await mOnClose();
+                }
+                if (!mHalfClosed) {
+                    co_await co_await wsSendPacket(sock, packet);
+                    mHalfClosed = true;
+                } else {
+                    break;
+                }
+            }
+        }
+        co_await sock.close();
+        co_return {};
+    }
+};
+
+inline Task<Expected<WebSocket>> websocket_server(HTTPServer::IO &io) {
+    if (co_await co_await httpUpgradeToWebSocket(io)) {
+        co_return WebSocket(io.extractSocket());
+    }
+    co_return std::errc::protocol_error;
+}
+
+inline Task<Expected<WebSocket>> websocket_client(HTTPConnection &conn, URI uri) {
+    String nonceKey;
+    nonceKey = websocketGenerateNonce();
+    HTTPRequest request = {
+        .method = "GET"_s,
+        .uri = uri,
+        .headers = {
+            {"sec-websocket-key"_s, nonceKey},
+            {"connection"_s, "Upgrade"_s},
+            {"upgrade"_s, "websocket"_s},
+            {"sec-websocket-version"_s, "13"_s},
+        },
+    };
+    auto [response, _] = co_await co_await conn.request(request);
+    if (response.headers.get("sec-websocket-accept") != websocketSecretHash(nonceKey)) {
+        co_return std::errc::protocol_error;
+    }
+    co_return WebSocket(conn.extractSocket());
+}
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+#include <cerrno>
+#include <signal.h>
+#include <spawn.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+namespace co_async {
+using Pid = pid_t;
+
+struct WaitProcessResult {
+    Pid pid;
+    int status;
+
+    enum ExitType : int {
+        Continued = CLD_CONTINUED,
+        Stopped = CLD_STOPPED,
+        Trapped = CLD_TRAPPED,
+        Dumped = CLD_DUMPED,
+        Killed = CLD_KILLED,
+        Exited = CLD_EXITED,
+        Timeout = -1,
+    } exitType;
+};
+
+inline Task<Expected<>> kill_process(Pid pid, int sig = SIGKILL) {
+    co_await expectError(kill(pid, sig));
+    co_return {};
+}
+
+#if CO_ASYNC_INVALFIX
+// IORING_OP_WAITID 要求内核 5.19。兜底改用 waitid(2)，但必须 WNOHANG 轮询：
+// 直接阻塞会占死事件循环线程（连定时器都跑不到），也收不到取消信号——when_any
+// 和 co_timeout 只是给取消令牌置位，不会打断正在阻塞的系统调用。
+inline constexpr auto kWaitProcessSyncPoll = std::chrono::milliseconds(10);
+
+// op 没提交时 Awaiter 停在 -ENOSYS；5.15 上提交后内核回 -EINVAL。
+inline bool waitidAsyncUnavailable(int res) {
+    return res == -EINVAL || res == -ENOSYS;
+}
+
+inline Task<Expected<WaitProcessResult>>
+waitProcessPoll(Pid pid, int options, siginfo_t &info,
+                std::optional<std::chrono::steady_clock::time_point> deadline) {
+    CancelToken cancel = co_await co_cancel;
+    for (;;) {
+        if (cancel.is_canceled()) [[unlikely]] {
+            co_return std::errc::operation_canceled;
+        }
+        if (waitid(P_PID, static_cast<id_t>(pid), &info, options | WNOHANG) <
+            0) [[unlikely]] {
+            co_return std::errc(errno);
+        }
+        if (info.si_pid != 0) {
+            break;
+        }
+        if (deadline && std::chrono::steady_clock::now() >= *deadline) {
+            co_return std::errc::stream_timeout;
+        }
+        co_await co_sleep(kWaitProcessSyncPoll);
+    }
+    co_return WaitProcessResult{
+        .pid = info.si_pid,
+        .status = info.si_status,
+        .exitType = static_cast<WaitProcessResult::ExitType>(info.si_code),
+    };
+}
+#endif
+
+inline Task<Expected<WaitProcessResult>> wait_process(Pid pid,
+                                                      int options = WEXITED) {
+    siginfo_t info{};
+    int res = co_await UringOp().prep_waitid(P_PID, static_cast<id_t>(pid),
+                                             &info, options, 0);
+#if CO_ASYNC_INVALFIX
+    if (waitidAsyncUnavailable(res)) {
+        co_return co_await waitProcessPoll(pid, options, info, std::nullopt);
+    }
+#endif
+    co_await expectError(res);
+    co_return WaitProcessResult{
+        .pid = info.si_pid,
+        .status = info.si_status,
+        .exitType = static_cast<WaitProcessResult::ExitType>(info.si_code),
+    };
+}
+
+inline Task<Expected<WaitProcessResult>>
+wait_process(Pid pid, std::chrono::steady_clock::duration timeout,
+             int options = WEXITED) {
+    siginfo_t info{};
+    auto ts = durationToKernelTimespec(timeout);
+    auto ret = expectError(co_await UringOp::link_ops(
+        UringOp().prep_waitid(P_PID, static_cast<id_t>(pid), &info, options, 0),
+        UringOp().prep_link_timeout(&ts, IORING_TIMEOUT_BOOTTIME)));
+#if CO_ASYNC_INVALFIX
+    if (ret == std::make_error_code(std::errc::invalid_argument) ||
+        ret == std::make_error_code(std::errc::function_not_supported)) {
+        co_return co_await waitProcessPoll(
+            pid, options, info, std::chrono::steady_clock::now() + timeout);
+    }
+#endif
+    if (ret == std::make_error_code(std::errc::operation_canceled)) {
+        co_return std::errc::stream_timeout;
+    }
+    co_await std::move(ret);
+    co_return WaitProcessResult{
+        .pid = info.si_pid,
+        .status = info.si_status,
+        .exitType = static_cast<WaitProcessResult::ExitType>(info.si_code),
+    };
+}
+
+struct ProcessBuilder {
+    ProcessBuilder() {
+        mAbsolutePath = false;
+        mEnvInherited = false;
+        throwingErrorErrno(posix_spawnattr_init(&mAttr));
+        throwingErrorErrno(posix_spawn_file_actions_init(&mFileActions));
+    }
+
+    ProcessBuilder(ProcessBuilder &&) = delete;
+
+    ~ProcessBuilder() {
+        posix_spawnattr_destroy(&mAttr);
+        posix_spawn_file_actions_destroy(&mFileActions);
+    }
+
+    ProcessBuilder &chdir(std::filesystem::path path) {
+        throwingErrorErrno(
+            posix_spawn_file_actions_addchdir_np(&mFileActions, path.c_str()));
+        return *this;
+    }
+
+    ProcessBuilder &open(int fd, FileHandle &&file) {
+        open(fd, file.fileNo());
+        mFileStore.push_back(std::move(file));
+        return *this;
+    }
+
+    ProcessBuilder &open(int fd, FileHandle const &file) {
+        return open(fd, file.fileNo());
+    }
+
+    ProcessBuilder &open(int fd, int ourFd) {
+        if (fd != ourFd) {
+            throwingErrorErrno(
+                posix_spawn_file_actions_adddup2(&mFileActions, ourFd, fd));
+        }
+        return *this;
+    }
+
+    ProcessBuilder &pipe_out(int fd, OwningStream &stream) {
+        int p[2];
+        throwingErrorErrno(pipe2(p, 0));
+        open(fd, FileHandle(p[1]));
+        stream = file_from_handle(FileHandle(p[0]));
+        close(p[0]);
+        close(p[1]);
+        return *this;
+    }
+
+    ProcessBuilder &pipe_in(int fd, OwningStream &stream) {
+        int p[2];
+        throwingErrorErrno(pipe2(p, 0));
+        open(fd, FileHandle(p[0]));
+        stream = file_from_handle(FileHandle(p[1]));
+        close(p[0]);
+        close(p[1]);
+        return *this;
+    }
+
+    ProcessBuilder &close(int fd) {
+        throwingErrorErrno(
+            posix_spawn_file_actions_addclose(&mFileActions, fd));
+        return *this;
+    }
+
+    ProcessBuilder &path(std::filesystem::path path, bool isAbsolute = false) {
+        mPath = path.string();
+        mAbsolutePath = isAbsolute;
+        return *this;
+    }
+
+    ProcessBuilder &arg(std::string_view arg) {
+        mArgvStore.emplace_back(arg);
+        return *this;
+    }
+
+    ProcessBuilder &inherit_env(bool inherit = true) {
+        if (inherit) {
+            for (char *const *e = environ; *e; ++e) {
+                mEnvpStore.emplace_back(*e);
+            }
+        }
+        mEnvInherited = true;
+        return *this;
+    }
+
+    ProcessBuilder &env(std::string_view key, std::string_view val) {
+        if (!mEnvInherited) {
+            inherit_env();
+        }
+        std::string env(key);
+        env.push_back('=');
+        env.append(val);
+        mEnvpStore.emplace_back(std::move(env));
+        return *this;
+    }
+
+    Task<Expected<Pid>> spawn() {
+        Pid pid;
+        std::vector<char *> argv;
+        std::vector<char *> envp;
+        if (!mArgvStore.empty()) {
+            argv.reserve(mArgvStore.size() + 2);
+            argv.push_back(mPath.data());
+            for (auto &s: mArgvStore) {
+                argv.push_back(s.data());
+            }
+            argv.push_back(nullptr);
+        } else {
+            argv = {mPath.data(), nullptr};
+        }
+        if (!mEnvpStore.empty()) {
+            envp.reserve(mEnvpStore.size() + 1);
+            for (auto &s: mEnvpStore) {
+                envp.push_back(s.data());
+            }
+            envp.push_back(nullptr);
+        }
+        int status = (mAbsolutePath ? posix_spawn : posix_spawnp)(
+            &pid, mPath.c_str(), &mFileActions, &mAttr, argv.data(),
+            mEnvpStore.empty() ? environ : envp.data());
+        if (status != 0) [[unlikely]] {
+            co_return std::errc(errno);
+        }
+        mPath.clear();
+        mArgvStore.clear();
+        mEnvpStore.clear();
+        mFileStore.clear();
+        co_return pid;
+    }
+
+private:
+    posix_spawn_file_actions_t mFileActions;
+    posix_spawnattr_t mAttr;
+    bool mAbsolutePath;
+    bool mEnvInherited;
+    std::string mPath;
+    std::vector<std::string> mArgvStore;
+    std::vector<std::string> mEnvpStore;
+    std::vector<FileHandle> mFileStore;
+};
+} // namespace co_async
+
+
+
+
+
+
+
+
+
+#include <fcntl.h>
+#include <sys/inotify.h>
+#include <unistd.h>
+
+namespace co_async {
+struct FileWatch {
+    enum FileEvent : std::uint32_t {
+        OnAccessed = IN_ACCESS,
+        OnOpened = IN_OPEN,
+        OnAttributeChanged = IN_ATTRIB,
+        OnModified = IN_MODIFY,
+        OnDeleted = IN_DELETE_SELF,
+        OnMoved = IN_MOVE_SELF,
+        OnChildCreated = IN_CREATE,
+        OnChildDeleted = IN_DELETE,
+        OnChildMovedAway = IN_MOVED_FROM,
+        OnChildMovedInto = IN_MOVED_TO,
+        OnWriteFinished = IN_CLOSE_WRITE,
+        OnReadFinished = IN_CLOSE_NOWRITE,
+    };
+
+    FileWatch()
+        : mFile(throwingErrorErrno(inotify_init1(0))),
+          mStream(file_from_handle(FileHandle(mFile))) {}
+
+    int add(std::filesystem::path const &path, FileEvent event) {
+        int wd =
+            throwingErrorErrno(inotify_add_watch(mFile, path.c_str(), event));
+        mWatches.emplace(wd, path);
+        return wd;
+    }
+
+    FileWatch &watch(std::filesystem::path const &path, FileEvent event,
+                     bool recursive = false) {
+        add(path, event);
+        if (recursive && std::filesystem::is_directory(path)) {
+            for (auto const &entry:
+                 std::filesystem::recursive_directory_iterator(path)) {
+                add(entry.path(), event);
+            }
+        }
+        return *this;
+    }
+
+    FileWatch &remove(int wd) {
+        throwingErrorErrno(inotify_rm_watch(mFile, wd));
+        mWatches.erase(wd);
+        return *this;
+    }
+
+    struct WaitFileResult {
+        std::filesystem::path path;
+        FileEvent event;
+    };
+
+    Task<Expected<WaitFileResult>> wait() {
+        if (!co_await mStream.getstruct(*mEventBuffer)) [[unlikely]] {
+            throw std::runtime_error("EOF while reading struct");
+        }
+        String name;
+        name.reserve(mEventBuffer->len);
+        co_await co_await mStream.getn(name, mEventBuffer->len);
+        name = name.c_str();
+        auto path = mWatches.at(mEventBuffer->wd);
+        if (!name.empty()) {
+            path /= make_path(name);
+        }
+        co_return WaitFileResult{
+            .path = std::move(path),
+            .event = static_cast<FileEvent>(mEventBuffer->mask),
+        };
+    }
+
+private:
+    int mFile;
+    OwningStream mStream;
+    std::unique_ptr<struct inotify_event> mEventBuffer =
+        std::make_unique<struct inotify_event>();
+    std::map<int, std::filesystem::path> mWatches;
+};
+} // namespace co_async
+
+// 
+// 
+// 
+// 
+// 
+// #include <signal.h>
+// #include <sys/types.h>
+// #include <sys/wait.h>
+// #include <unistd.h>
+//
+// namespace co_async {
+// struct SignalingContextMT {
+//     static void startMain(std::stop_token stop) {
+//         while (!stop.stop_requested()) [[likely]] {
+//             sigset_t s;
+//             sigemptyset(&s);
+//             std::unique_lock lock(instance->mMutex);
+//             for (auto [signo, waiters]: instance->mWaitingSignals) {
+//                 sigaddset(&s, signo);
+//             }
+//             lock.unlock();
+//             int signo;
+//             throwingError(-sigwait(&s, &signo));
+//             lock.lock();
+//             std::deque<std::coroutine_handle<>> waiters;
+//             waiters.swap(instance->mWaitingSignals.at(signo));
+//             lock.unlock();
+//             for (auto coroutine: waiters) {
+//                 IOContextMT::spawn(coroutine);
+//             }
+//         }
+//     }
+//
+//     struct SignalAwaiter {
+//         bool await_ready() const noexcept {
+//             return false;
+//         }
+//
+//         void await_suspend(std::coroutine_handle<> coroutine) const {
+//             std::lock_guard lock(instance->mMutex);
+//             instance->mWaitingSignals[mSigno].push_back(coroutine);
+//         }
+//
+//         void await_resume() const noexcept {}
+//
+//         int mSigno;
+//     };
+//
+//     static SignalAwaiter waitSignal(int signo) {
+//         return SignalAwaiter(signo);
+//     }
+//
+//     static void start() {
+//         instance->mWorker =
+//             std::jthread([](std::stop_token stop) { startMain(stop); });
+//     }
+//
+//     static inline SignalingContextMT *instance;
+//
+//     SignalingContextMT() {
+//         if (instance) {
+//             throw std::logic_error(
+//                 "each process may contain only one SignalingContextMT");
+//         }
+//         instance = this;
+//         start();
+//     }
+//
+//     SignalingContextMT(SignalingContextMT &&) = delete;
+//
+//     ~SignalingContextMT() {
+//         instance = nullptr;
+//     }
+//
+// private:
+//     std::map<int, std::deque<std::coroutine_handle<>>> mWaitingSignals;
+//     std::mutex mMutex;
+//     std::jthread mWorker;
+// };
+// } // namespace co_async
 
 
 //
@@ -8332,4789 +13218,66 @@ DEBUG_NAMESPACE_END
 
 
 
+namespace co_async {
+
+template <class ...Fs>
+struct overloaded : Fs... {
+    using Fs::operator()...;
+};
+
+template <class ...Fs>
+overloaded(Fs...) -> overloaded<Fs...>;
+
+}
 
 
-/* #include <array> */
-/* #include <cstddef> */
-/* #include <cstdint> */
-/* #include <map> */
-/* #include <memory> */
-/* #include <optional> */
-/* #include <string> */
-/* #include <string_view> */
-/* #include <type_traits> */
-/* #include <unordered_map> */
-/* #include <variant> */
-/* #include <vector> */
+
+
 
 namespace co_async {
-#if defined(_MSC_VER) && (!defined(_MSVC_TRADITIONAL) || _MSVC_TRADITIONAL)
-# define REFLECT(...) \
-     __pragma(message("Please turn on /Zc:preprocessor before using " \
-                      "REFLECT!"))
-# define REFLECT_GLOBAL(...) \
-     __pragma(message("Please turn on /Zc:preprocessor before using " \
-                      "REFLECT!"))
-# define REFLECT_GLOBAL_TEMPLATED(...) \
-     __pragma(message("Please turn on /Zc:preprocessor before using " \
-                      "REFLECT!"))
-# define REFLECT__PP_VA_OPT_SUPPORT(...) 0
-#else
-# define REFLECT__PP_CONCAT_(a, b)          a##b
-# define REFLECT__PP_CONCAT(a, b)           REFLECT__PP_CONCAT_(a, b)
-# define REFLECT__PP_GET_1(a, ...)          a
-# define REFLECT__PP_GET_2(a, b, ...)       b
-# define REFLECT__PP_GET_3(a, b, c, ...)    c
-# define REFLECT__PP_GET_4(a, b, c, d, ...) d
-# define REFLECT__PP_VA_EMPTY_(...)         REFLECT__PP_GET_2(__VA_OPT__(, ) 0, 1, )
-# define REFLECT__PP_VA_OPT_SUPPORT         !REFLECT__PP_VA_EMPTY_
-# if REFLECT__PP_VA_OPT_SUPPORT(?)
-#  define REFLECT__PP_VA_EMPTY(...) REFLECT__PP_VA_EMPTY_(__VA_ARGS__)
-# else
-#  define REFLECT__PP_VA_EMPTY(...) 0
-# endif
-# define REFLECT__PP_IF(a, t, f)  REFLECT__PP_IF_(a, t, f)
-# define REFLECT__PP_IF_(a, t, f) REFLECT__PP_IF__(a, t, f)
-# define REFLECT__PP_IF__(a, t, f) \
-     REFLECT__PP_IF___(REFLECT__PP_VA_EMPTY a, t, f)
-# define REFLECT__PP_IF___(a, t, f)  REFLECT__PP_IF____(a, t, f)
-# define REFLECT__PP_IF____(a, t, f) REFLECT__PP_IF_##a(t, f)
-# define REFLECT__PP_IF_0(t, f)      REFLECT__PP_UNWRAP_BRACE(f)
-# define REFLECT__PP_IF_1(t, f)      REFLECT__PP_UNWRAP_BRACE(t)
-# define REFLECT__PP_NARG(...) \
-     REFLECT__PP_IF((__VA_ARGS__), (0), \
-                    (REFLECT__PP_NARG_(__VA_ARGS__, 26, 25, 24, 23, 22, 21, \
-                                       20, 19, 18, 17, 16, 15, 14, 13, 12, 11, \
-                                       10, 9, 8, 7, 6, 5, 4, 3, 2, 1)))
-# define REFLECT__PP_NARG_(...) REFLECT__PP_NARG__(__VA_ARGS__)
-# define REFLECT__PP_NARG__(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, \
-                            _13, _14, _15, _16, _17, _18, _19, _20, _21, _22, \
-                            _23, _24, _25, _26, N, ...) \
-     N
-# define REFLECT__PP_FOREACH(f, ...) \
-     REFLECT__PP_FOREACH_(REFLECT__PP_NARG(__VA_ARGS__), f, __VA_ARGS__)
-# define REFLECT__PP_FOREACH_(N, f, ...) \
-     REFLECT__PP_FOREACH__(N, f, __VA_ARGS__)
-# define REFLECT__PP_FOREACH__(N, f, ...) \
-     REFLECT__PP_FOREACH_##N(f, __VA_ARGS__)
-# define REFLECT__PP_FOREACH_0(f, ...)
-# define REFLECT__PP_FOREACH_1(f, a)             f(a)
-# define REFLECT__PP_FOREACH_2(f, a, b)          f(a) f(b)
-# define REFLECT__PP_FOREACH_3(f, a, b, c)       f(a) f(b) f(c)
-# define REFLECT__PP_FOREACH_4(f, a, b, c, d)    f(a) f(b) f(c) f(d)
-# define REFLECT__PP_FOREACH_5(f, a, b, c, d, e) f(a) f(b) f(c) f(d) f(e)
-# define REFLECT__PP_FOREACH_6(f, a, b, c, d, e, g) \
-     f(a) f(b) f(c) f(d) f(e) f(g)
-# define REFLECT__PP_FOREACH_7(f, a, b, c, d, e, g, h) \
-     f(a) f(b) f(c) f(d) f(e) f(g) f(h)
-# define REFLECT__PP_FOREACH_8(f, a, b, c, d, e, g, h, i) \
-     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i)
-# define REFLECT__PP_FOREACH_9(f, a, b, c, d, e, g, h, i, j) \
-     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j)
-# define REFLECT__PP_FOREACH_10(f, a, b, c, d, e, g, h, i, j, k) \
-     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k)
-# define REFLECT__PP_FOREACH_11(f, a, b, c, d, e, g, h, i, j, k, l) \
-     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l)
-# define REFLECT__PP_FOREACH_12(f, a, b, c, d, e, g, h, i, j, k, l, m) \
-     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m)
-# define REFLECT__PP_FOREACH_13(f, a, b, c, d, e, g, h, i, j, k, l, m, n) \
-     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n)
-# define REFLECT__PP_FOREACH_14(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o) \
-     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o)
-# define REFLECT__PP_FOREACH_15(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
-                                p) \
-     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) f(p)
-# define REFLECT__PP_FOREACH_16(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
-                                p, q) \
-     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) \
-         f(p) f(q)
-# define REFLECT__PP_FOREACH_17(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
-                                p, q, r) \
-     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) \
-         f(p) f(q) f(r)
-# define REFLECT__PP_FOREACH_18(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
-                                p, q, r, s) \
-     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) \
-         f(p) f(q) f(r) f(s)
-# define REFLECT__PP_FOREACH_19(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
-                                p, q, r, s, t) \
-     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) \
-         f(p) f(q) f(r) f(s) f(t)
-# define REFLECT__PP_FOREACH_20(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
-                                p, q, r, s, t, u) \
-     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) \
-         f(p) f(q) f(r) f(s) f(t) f(u)
-# define REFLECT__PP_FOREACH_21(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
-                                p, q, r, s, t, u, v) \
-     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) \
-         f(p) f(q) f(r) f(s) f(t) f(u) f(v)
-# define REFLECT__PP_FOREACH_22(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
-                                p, q, r, s, t, u, v, w) \
-     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) \
-         f(p) f(q) f(r) f(s) f(t) f(u) f(v) f(w)
-# define REFLECT__PP_FOREACH_23(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
-                                p, q, r, s, t, u, v, w, x) \
-     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) \
-         f(p) f(q) f(r) f(s) f(t) f(u) f(v) f(w) f(x)
-# define REFLECT__PP_FOREACH_24(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
-                                p, q, r, s, t, u, v, w, x, y) \
-     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) \
-         f(p) f(q) f(r) f(s) f(t) f(u) f(v) f(w) f(x) f(y)
-# define REFLECT__PP_FOREACH_25(f, a, b, c, d, e, g, h, i, j, k, l, m, n, o, \
-                                p, q, r, s, t, u, v, w, x, y, z) \
-     f(a) f(b) f(c) f(d) f(e) f(g) f(h) f(i) f(j) f(k) f(l) f(m) f(n) f(o) \
-         f(p) f(q) f(r) f(s) f(t) f(u) f(v) f(w) f(x) f(y) f(z)
-# define REFLECT__PP_STRINGIFY(...)     REFLECT__PP_STRINGIFY(__VA_ARGS__)
-# define REFLECT__PP_STRINGIFY_(...)    #__VA_ARGS__
-# define REFLECT__PP_EXPAND(...)        REFLECT__PP_EXPAND_(__VA_ARGS__)
-# define REFLECT__PP_EXPAND_(...)       __VA_ARGS__
-# define REFLECT__PP_UNWRAP_BRACE(...)  REFLECT__PP_UNWRAP_BRACE_ __VA_ARGS__
-# define REFLECT__PP_UNWRAP_BRACE_(...) __VA_ARGS__
-# ifdef DEBUG_REPR
-#  define REFLECT__EXTRA(...)        DEBUG_REPR(__VA_ARGS__)
-#  define REFLECT_GLOBAL__EXTRA(...) DEBUG_REPR_GLOBAL(__VA_ARGS__)
-#  define REFLECT_GLOBAL_TEMPLATED__EXTRA(...) \
-      DEBUG_REPR_GLOBAL_TEMPLATED(__VA_ARGS__)
-# else
-#  define REFLECT__EXTRA(...)
-#  define REFLECT_GLOBAL__EXTRA(...)
-#  define REFLECT_GLOBAL_TEMPLATED__EXTRA(...)
-# endif
-# define REFLECT__ON_EACH(x) reflector(#x, x);
-# define REFLECT(...) \
-     template <class ReflectorT> \
-     constexpr void REFLECT__MEMBERS(ReflectorT &reflector){ \
-         REFLECT__PP_FOREACH(REFLECT__ON_EACH, \
-                             __VA_ARGS__)} REFLECT__EXTRA(__VA_ARGS__)
-# define REFLECT__GLOBAL_ON_EACH(x) \
-     reflector(#x##_REFLECT__static_string, object.x);
-# define REFLECT_GLOBAL(T, ...) \
-     template <class ReflectorT> \
-     constexpr void REFLECT__MEMBERS(ReflectorT &reflector, T &object){ \
-         REFLECT__PP_FOREACH(REFLECT__GLOBAL_ON_EACH, \
-                             __VA_ARGS__)} REFLECT_GLOBAL__EXTRA(__VA_ARGS__)
-# define REFLECT_GLOBAL_TEMPLATED(T, Tmpls, TmplsClassed, ...) \
-     template <class ReflectorT, REFLECT__PP_UNWRAP_BRACE(TmplsClassed)> \
-     constexpr void REFLECT__MEMBERS( \
-         ReflectorT &reflector, \
-         T<REFLECT__PP_UNWRAP_BRACE(Tmpls)> &object){REFLECT__PP_FOREACH( \
-         REFLECT__GLOBAL_ON_EACH, \
-         __VA_ARGS__)} REFLECT_GLOBAL_TEMPLATED__EXTRA(__VA_ARGS__)
-#endif
-struct JsonValue {
-    using Ptr = std::unique_ptr<JsonValue>;
-    using Null = std::monostate;
-    using String = std::string;
-    using Dict = std::map<std::string, JsonValue::Ptr>;
-    using Array = std::vector<JsonValue::Ptr>;
-    using Integer = std::int64_t;
-    using Real = double;
-    using Boolean = bool;
-    using Union =
-        std::variant<Null, String, Dict, Array, Integer, Real, Boolean>;
-    Union inner;
 
-    template <class T>
-    explicit JsonValue(std::in_place_type_t<T>, T &&value)
-        : inner(std::in_place_type<T>, std::move(value)) {}
+struct SpinBarrier {
+    explicit SpinBarrier(std::size_t n) noexcept
+        : m_top_waiting(static_cast<std::uint32_t>(n) - 1),
+          m_num_waiting(0),
+          m_sync_flip(0) {}
 
-    template <class T>
-    static Ptr make(T value) {
-        return std::make_unique<JsonValue>(std::in_place_type<T>,
-                                           std::move(value));
-    }
-};
-
-/* template <class T> */
-/* struct NoDefault { */
-/* private: */
-/*     T value; */
-/*  */
-/* public: */
-/*     NoDefault(T &&value) noexcept(std::is_nothrow_move_constructible_v<T>) */
-/*         : value(std::move(value)) {} */
-/*  */
-/*     NoDefault(T const &value)
- * noexcept(std::is_nothrow_copy_constructible_v<T>) */
-/*         : value(value) {} */
-/*  */
-/*     template <class U, class = std::enable_if_t<std::is_convertible_v<U, T>>>
- */
-/*     NoDefault(U &&value) noexcept(std::is_nothrow_convertible_v<U, T>) */
-/*         : value(std::forward<U>(value)) {} */
-/*  */
-/*     template <class = std::enable_if_t<std::is_convertible_v< */
-/*                   std::initializer_list<typename T::value_type>, T>>> */
-/*     NoDefault(std::initializer_list<typename T::value_type> value) noexcept(
- */
-/*         std::is_nothrow_convertible_v< */
-/*             std::initializer_list<typename T::value_type>, T>) */
-/*         : value(std::move(value)) {} */
-/*  */
-/*     NoDefault(NoDefault const &) = default; */
-/*     NoDefault &operator=(NoDefault const &) = default; */
-/*     NoDefault(NoDefault &&) = default; */
-/*     NoDefault &operator=(NoDefault &&) = default; */
-/*  */
-/*     T &operator*() noexcept { */
-/*         return value; */
-/*     } */
-/*  */
-/*     T const &operator*() const noexcept { */
-/*         return value; */
-/*     } */
-/*  */
-/*     T *operator->() noexcept { */
-/*         return std::addressof(value); */
-/*     } */
-/*  */
-/*     T const *operator->() const noexcept { */
-/*         return std::addressof(value); */
-/*     } */
-/*  */
-/*     using value_type = T; */
-/* }; */
-
-struct JsonEncoder;
-
-template <class T, class = void>
-struct JsonTrait {
-    static void putValue(JsonEncoder *encoder, T const &value) {
-        static_assert(!std::is_same_v<T, T>,
-                      "the given type contains members that are not reflected, "
-                      "please add REFLECT macro to it");
-    }
-
-    static bool getValue(JsonValue::Union &data, T &value,
-                         std::error_code &ec) {
-        static_assert(!std::is_same_v<T, T>,
-                      "the given type contains members that are not reflected, "
-                      "please add REFLECT macro to it");
-        return false;
-    }
-};
-
-struct JsonEncoder {
-    std::string json;
-
-    void put(char c) {
-        json.push_back(c);
-    }
-
-    void put(char const *s, std::size_t len) {
-        json.append(s, len);
-    }
-
-    void putLiterialString(char const *name) {
-        put('"');
-        json.append(name);
-        put('"');
-    }
-
-    void putString(char const *name, std::size_t len) {
-        put('"');
-        for (char const *it = name, *ep = name + len; it != ep; ++it) {
-            char c = *it;
-            switch (c) {
-            case '\n': put("\\n", 2); break;
-            case '\r': put("\\r", 2); break;
-            case '\t': put("\\t", 2); break;
-            case '\\': put("\\\\", 2); break;
-            case '\0': put("\\0", 2); break;
-            case '"':  put("\\\"", 2); break;
-            default:
-                if ((c >= 0 && c < 0x20) || c == 0x7F) {
-                    put("\\u00", 4);
-                    auto u = static_cast<unsigned char>(c);
-                    put("0123456789abcdef"[u >> 4]);
-                    put("0123456789abcdef"[u & 0x0F]);
-                } else {
-                    put(c);
-                }
-                break;
-            }
-        }
-        put('"');
-    }
-
-    template <class T>
-    void putArithmetic(T const &value) {
-        json.append(std::to_string(value));
-    }
-
-    template <class T>
-    void putValue(T const &value) {
-        JsonTrait<T>::putValue(this, value);
-    }
-};
-enum class JsonError : int {
-    Success = 0,
-    NullEntry,
-    TypeMismatch,
-    UnexpectedEnd,
-    UnexpectedToken,
-    NonTerminatedString,
-    InvalidUTF16String,
-    DictKeyNotString,
-    InvalidNumberFormat,
-    InvalidVariantType,
-    NotImplemented,
-};
-
-inline std::error_category const &jsonCategory() {
-    static struct final : std::error_category {
-        char const *name() const noexcept override {
-            return "json";
-        }
-
-        std::string message(int e) const override {
-            using namespace std::string_literals;
-            switch (static_cast<JsonError>(e)) {
-            case JsonError::Success:         return "success"s;
-            case JsonError::NullEntry:       return "no such entry"s;
-            case JsonError::TypeMismatch:    return "type mismatch"s;
-            case JsonError::UnexpectedEnd:   return "unexpected end"s;
-            case JsonError::UnexpectedToken: return "unexpected token"s;
-            case JsonError::NonTerminatedString:
-                return "non-terminated string"s;
-            case JsonError::InvalidUTF16String: return "invalid utf-16 string"s;
-            case JsonError::DictKeyNotString:   return "dict key must be string"s;
-            case JsonError::InvalidNumberFormat:
-                return "invalid number format"s;
-            case JsonError::InvalidVariantType:
-                return "invalid variant type"s;
-            case JsonError::NotImplemented: return "not implemented"s;
-            default:                        return "unknown error"s;
-            }
-        }
-    } instance;
-
-    return instance;
-}
-
-inline std::error_code make_error_code(JsonError e) {
-    return std::error_code(static_cast<int>(e), jsonCategory());
-}
-
-inline JsonValue::Ptr jsonParse(std::string_view &json, std::error_code &ec) {
-    using namespace std::string_view_literals;
-    JsonValue::Ptr current;
-    auto nonempty = json.find_first_not_of(" \t\n\r\0"sv);
-    if (nonempty == json.npos) {
-        ec = make_error_code(JsonError::UnexpectedEnd);
-        return nullptr;
-    }
-    json.remove_prefix(nonempty);
-    char c = json.front();
-    if (c == '"') {
-        json.remove_prefix(1);
-        std::string str;
-        unsigned int phase = 0;
-        unsigned int lasthex = 0;
-        unsigned int hex = 0;
-        std::size_t i;
-        auto unsignedExtent = [](unsigned int x) {
-            return static_cast<char>(static_cast<unsigned char>(x));
-        };
-        for (i = 0;; ++i) {
-            if (i == json.size()) {
-                ec = make_error_code(JsonError::NonTerminatedString);
-                return nullptr;
-            }
-            char c = json[i];
-            if (phase == 0) {
-                if (c == '"') {
-                    break;
-                } else if (c == '\\') {
-                    phase = 1;
-                    continue;
-                }
-            } else if (phase == 1) {
-                if (c == 'u') {
-                    phase = 2;
-                    hex = 0;
-                    lasthex = false;
-                    continue;
-                } else if (c == 'n') {
-                    c = '\n';
-                } else if (c == 't') {
-                    c = '\t';
-                } else if (c == '\\') {
-                    c = '\\';
-                } else if (c == '0') {
-                    c = '\0';
-                } else if (c == 'r') {
-                    c = '\r';
-                } else if (c == 'v') {
-                    c = '\v';
-                } else if (c == 'f') {
-                    c = '\f';
-                } else if (c == 'b') {
-                    c = '\b';
-                } else if (c == 'a') {
-                    c = '\a';
-                }
-                phase = 0;
-            } else {
-                hex <<= 4;
-                if ('0' <= c && c <= '9') {
-                    hex |= static_cast<unsigned int>(c - '0');
-                } else if ('a' <= c && c <= 'f') {
-                    hex |= static_cast<unsigned int>(c - 'a' + 10);
-                } else if ('A' <= c && c <= 'F') {
-                    hex |= static_cast<unsigned int>(c - 'A' + 10);
-                }
-                if (phase == 5) {
-                    if (0xD800 <= hex && hex < 0xDC00) {
-                        if (!lasthex) {
-                            phase = 2;
-                            lasthex = hex;
-                            hex = 0;
-                            continue;
-                        } else {
-                            ec = make_error_code(JsonError::InvalidUTF16String);
-                            return nullptr;
-                        }
-                    } else if (0xDC00 <= hex && hex < 0xE000) {
-                        if (lasthex) {
-                            hex = 0x10000 + (lasthex - 0xD800) * 0x400 +
-                                  (hex - 0xDC00);
-                            lasthex = false;
-                            phase = 0;
-                        } else {
-                            ec = make_error_code(JsonError::InvalidUTF16String);
-                            return nullptr;
-                        }
-                    }
-                    if (hex <= 0x7F) {
-                        str.push_back(unsignedExtent(hex));
-                    } else if (hex <= 0x7FF) {
-                        str.push_back(unsignedExtent(0xC0 | (hex >> 6)));
-                        str.push_back(unsignedExtent(0x80 | (hex & 0x3F)));
-                    } else if (hex <= 0xFFFF) {
-                        str.push_back(unsignedExtent(0xE0 | (hex >> 12)));
-                        str.push_back(
-                            unsignedExtent(0x80 | ((hex >> 6) & 0x3F)));
-                        str.push_back(unsignedExtent(0x80 | (hex & 0x3F)));
-                    } else if (hex <= 0x10FFFF) {
-                        str.push_back(unsignedExtent(0xF0 | (hex >> 18)));
-                        str.push_back(
-                            unsignedExtent(0x80 | ((hex >> 12) & 0x3F)));
-                        str.push_back(
-                            unsignedExtent(0x80 | ((hex >> 6) & 0x3F)));
-                        str.push_back(unsignedExtent(0x80 | (hex & 0x3F)));
-                    } else {
-                        ec = make_error_code(JsonError::InvalidUTF16String);
-                        return nullptr;
-                    }
-                    phase = 0;
-                } else {
-                    ++phase;
-                }
-                continue;
-            }
-            str.push_back(c);
-        }
-        json.remove_prefix(i + 1);
-        current = JsonValue::make<JsonValue::String>(std::move(str));
-    } else if (c == '{') {
-        json.remove_prefix(1);
-        std::map<std::string, JsonValue::Ptr> dict;
-        for (;;) {
-            nonempty = json.find_first_not_of(" \t\n\r\0"sv);
-            if (nonempty == json.npos) {
-                ec = make_error_code(JsonError::UnexpectedEnd);
-                return nullptr;
-            }
-            json.remove_prefix(nonempty);
-            if (json.front() == '}') {
-                json.remove_prefix(1);
-                break;
-            } else if (json.front() == ',') {
-                json.remove_prefix(1);
-                continue;
-            } else {
-                auto key = jsonParse(json, ec);
-                if (!key) {
-                    return nullptr;
-                }
-                std::string keyString;
-                if (auto p = std::get_if<JsonValue::String>(&key->inner)) {
-                    keyString = std::move(*p);
-                } else {
-                    ec = make_error_code(JsonError::DictKeyNotString);
-                    return nullptr;
-                }
-                auto nonempty = json.find_first_not_of(" \t\n\r\0"sv);
-                if (nonempty == json.npos) {
-                    ec = make_error_code(JsonError::UnexpectedEnd);
-                    return nullptr;
-                }
-                json.remove_prefix(nonempty);
-                if (json.front() != ':') {
-                    ec = make_error_code(JsonError::UnexpectedToken);
-                    return nullptr;
-                }
-                json.remove_prefix(1);
-                auto value = jsonParse(json, ec);
-                if (!value) {
-                    return nullptr;
-                }
-                dict.emplace(std::move(keyString), std::move(value));
-            }
-        }
-        current = JsonValue::make<JsonValue::Dict>(std::move(dict));
-    } else if (c == '[') {
-        json.remove_prefix(1);
-        std::vector<JsonValue::Ptr> array;
-        for (;;) {
-            auto nonempty = json.find_first_not_of(" \t\n\r\0"sv);
-            if (nonempty == json.npos) {
-                ec = make_error_code(JsonError::UnexpectedEnd);
-                return nullptr;
-            }
-            json.remove_prefix(nonempty);
-            if (json.front() == ']') {
-                json.remove_prefix(1);
-                break;
-            } else if (json.front() == ',') {
-                json.remove_prefix(1);
-                continue;
-            } else {
-                auto value = jsonParse(json, ec);
-                if (!value) {
-                    return nullptr;
-                }
-                array.emplace_back(std::move(value));
-            }
-        }
-        current = JsonValue::make<JsonValue::Array>(std::move(array));
-    } else if (('0' <= c && c <= '9') || c == '.' || c == '-' || c == '+') {
-        auto end = json.find_first_of(",]}"sv);
-        if (end == json.npos) {
-            end = json.size();
-        }
-        auto str = std::string(json.data(), end);
-        if (str.find('.') != str.npos) {
-            double value;
-            try {
-                value = std::stod(str);
-            } catch (std::exception const &) {
-                ec = make_error_code(JsonError::InvalidNumberFormat);
-                return nullptr;
-            }
-            current = JsonValue::make<JsonValue::Real>(value);
-        } else {
-            std::int64_t value;
-            try {
-                value = std::stoll(str);
-            } catch (std::exception const &) {
-                ec = make_error_code(JsonError::InvalidNumberFormat);
-                return nullptr;
-            }
-            current = JsonValue::make<JsonValue::Integer>(value);
-        }
-        json.remove_prefix(end);
-    } else if (c == 't') {
-        if (!json.starts_with("true"sv)) {
-            ec = make_error_code(JsonError::UnexpectedToken);
-            return nullptr;
-        }
-        current = JsonValue::make<JsonValue::Boolean>(true);
-        json.remove_prefix(4);
-    } else if (c == 'f') {
-        if (!json.starts_with("false"sv)) {
-            ec = make_error_code(JsonError::UnexpectedToken);
-            return nullptr;
-        }
-        current = JsonValue::make<JsonValue::Boolean>(false);
-        json.remove_prefix(5);
-    } else if (c == 'n') {
-        if (!json.starts_with("null"sv)) {
-            ec = make_error_code(JsonError::UnexpectedToken);
-            return nullptr;
-        }
-        current = JsonValue::make<JsonValue::Null>(JsonValue::Null());
-        json.remove_prefix(4);
-    } else {
-        ec = make_error_code(JsonError::UnexpectedToken);
-        return nullptr;
-    }
-    return current;
-}
-
-struct ReflectorJsonEncode {
-    JsonEncoder *encoder;
-    bool comma = false;
-
-    template <class T>
-    void operator()(char const *name, T &value) {
-        if (!comma) {
-            comma = true;
-        } else {
-            encoder->put(',');
-        }
-        encoder->putLiterialString(name);
-        encoder->put(':');
-        encoder->putValue(value);
-    }
-};
-
-struct ReflectorJsonDecode {
-    JsonValue::Dict *currentDict;
-    std::error_code ec{};
-    bool failed = false;
-
-    template <class T>
-    void operator()(char const *name, T &value) {
-        if (failed) {
-            return;
-        }
-        auto it = currentDict->find(name);
-        if (it == currentDict->end()) {
-            JsonValue::Union nullData;
-            failed = !JsonTrait<T>::getValue(nullData, value, ec);
-        } else {
-            failed = !JsonTrait<T>::getValue(it->second->inner, value, ec);
-        }
-    }
-
-    static void typeMismatch(char const *expect, JsonValue::Union const &inner,
-                             std::error_code &ec) {
-        if (std::holds_alternative<JsonValue::Null>(inner)) {
-#if DEBUG_LEVEL
-            std::cerr << std::string("json_decode no such entry (expect ") +
-                             expect + ", got null)\n";
-#endif
-            ec = make_error_code(JsonError::NullEntry);
-        } else {
-            char const *got = "???";
-            std::visit(
-                [&](auto &&arg) {
-                    using T = std::decay_t<decltype(arg)>;
-                    if constexpr (std::is_same_v<T, JsonValue::Null>) {
-                        got = "null";
-                    } else if constexpr (std::is_same_v<T, JsonValue::String>) {
-                        got = "string";
-                    } else if constexpr (std::is_same_v<T, JsonValue::Dict>) {
-                        got = "dict";
-                    } else if constexpr (std::is_same_v<T, JsonValue::Array>) {
-                        got = "array";
-                    } else if constexpr (std::is_same_v<T,
-                                                        JsonValue::Integer>) {
-                        got = "integer";
-                    } else if constexpr (std::is_same_v<T, JsonValue::Real>) {
-                        got = "real";
-                    } else if constexpr (std::is_same_v<T,
-                                                        JsonValue::Boolean>) {
-                        got = "boolean";
-                    }
-                },
-                inner);
-#if DEBUG_LEVEL
-            std::cerr << std::string("json_decode type mismatch (expect ") +
-                             expect + ", got " + got + ")\n";
-#endif
-            ec = make_error_code(JsonError::TypeMismatch);
-        }
-    }
-};
-
-struct JsonTraitPointerLike {
-    template <class T>
-    static void putValue(JsonEncoder *encoder, T const &value) {
-        if (value == nullptr) {
-            encoder->put("null", 4);
-        } else {
-            JsonTrait<typename std::pointer_traits<T>::element_type>::putValue(
-                encoder, *value);
-        }
-    }
-
-    template <class T>
-    static bool getValue(JsonValue::Union const &inner, T &value,
-                         std::error_code &ec) {
-        JsonTrait<typename std::pointer_traits<T>::element_type>::getValue(
-            inner, *value, ec);
-        return !ec;
-    }
-};
-
-struct JsonTraitArrayLike {
-    template <class T>
-    static void putValue(JsonEncoder *encoder, T const &value) {
-        auto bit = value.begin();
-        auto eit = value.end();
-        encoder->put('[');
-        bool comma = false;
-        for (auto it = bit; it != eit; ++it) {
-            if (!comma) {
-                comma = true;
-            } else {
-                encoder->put(',');
-            }
-            JsonTrait<typename T::value_type>::putValue(encoder, *it);
-        }
-        encoder->put(']');
-    }
-
-    template <class T>
-    static bool getValue(JsonValue::Union &data, T &value,
-                         std::error_code &ec) {
-        if (auto p = std::get_if<JsonValue::Array>(&data)) {
-            auto bit = p->begin();
-            auto eit = p->end();
-            for (auto it = bit; it != eit; ++it) {
-                auto &element = value.emplace_back();
-                if (!JsonTrait<typename T::value_type>::getValue((*it)->inner,
-                                                                 element, ec)) {
-                    return false;
-                }
-            }
+    bool arrive_and_wait() noexcept {
+        bool old_flip = m_sync_flip.load(std::memory_order_relaxed);
+        if (m_num_waiting.fetch_add(1, std::memory_order_relaxed) ==
+            m_top_waiting) {
+            m_num_waiting.store(0, std::memory_order_relaxed);
+            m_sync_flip.store(!old_flip, std::memory_order_release);
             return true;
         } else {
-            ReflectorJsonDecode::typeMismatch("array", data, ec);
+            while (m_sync_flip.load(std::memory_order_acquire) == old_flip)
+                ;
+#if __cpp_lib_atomic_wait
+            m_sync_flip.wait(old_flip, std::memory_order_acquire);
+#endif
             return false;
         }
     }
-};
 
-struct JsonTraitDictLike {
-    template <class T>
-    static void putValue(JsonEncoder *encoder, T const &value) {
-        auto bit = value.begin();
-        auto eit = value.end();
-        encoder->put('{');
-        bool comma = false;
-        for (auto it = bit; it != eit; ++it) {
-            if (!comma) {
-                comma = true;
-            } else {
-                encoder->put(',');
-            }
-            encoder->putString(it->first);
-            encoder->put(':');
-            JsonTrait<typename T::mapped_type>::putValue(encoder, it->second);
-        }
-        encoder->put('}');
-    }
-
-    template <class T>
-    static bool getValue(JsonValue::Union &data, T &value,
-                         std::error_code &ec) {
-        if (auto p = std::get_if<JsonValue::Dict>(&data)) {
-            auto bit = p->begin();
-            auto eit = p->end();
-            for (auto it = bit; it != eit; ++it) {
-                auto &element = value.try_emplace(it->first).first->second;
-                if (!JsonTrait<typename T::mapped_type>::getValue(
-                        it->second->inner, element, ec)) {
-                    return false;
-                }
-            }
+    bool arrive_and_drop() noexcept {
+        bool old_flip = m_sync_flip.load(std::memory_order_relaxed);
+        if (m_num_waiting.fetch_add(1, std::memory_order_relaxed) ==
+            m_top_waiting) {
+            m_num_waiting.store(0, std::memory_order_relaxed);
+            m_sync_flip.store(!old_flip, std::memory_order_release);
             return true;
         } else {
-            ReflectorJsonDecode::typeMismatch("dict", data, ec);
             return false;
         }
     }
-};
-
-struct JsonTraitStringLike {
-    template <class T>
-    static void putValue(JsonEncoder *encoder, T const &value) {
-        encoder->putString(value.data(), value.size());
-    }
-
-    template <class T>
-    static bool getValue(JsonValue::Union &data, T &value,
-                         std::error_code &ec) {
-        if (auto p = std::get_if<JsonValue::String>(&data)) {
-            value = std::move(*p);
-            return true;
-        } else {
-            ReflectorJsonDecode::typeMismatch("string", data, ec);
-            return false;
-        }
-    }
-};
-
-struct JsonTraitNullLike {
-    template <class T>
-    static void putValue(JsonEncoder *encoder, T const &value) {
-        encoder->put("null", 4);
-    }
-
-    template <class T>
-    static bool getValue(JsonValue::Union &data, T &value,
-                         std::error_code &ec) {
-        if (std::get_if<JsonValue::Null>(&data)) {
-            return true;
-        } else {
-            ReflectorJsonDecode::typeMismatch("null", data, ec);
-            return false;
-        }
-    }
-};
-
-struct JsonTraitOptionalLike {
-    template <class T>
-    static void putValue(JsonEncoder *encoder, T const &value) {
-        if (value) {
-            encoder->putValue(*value);
-        } else {
-            encoder->put("null", 4);
-        }
-    }
-
-    template <class T>
-    static bool getValue(JsonValue::Union &data, T &value,
-                         std::error_code &ec) {
-        if (std::get_if<JsonValue::Null>(&data)) {
-            value = std::nullopt;
-            return true;
-        } else {
-            return JsonTrait<typename T::value_type>::getValue(
-                data, value.emplace(), ec);
-        }
-    }
-};
-
-struct JsonTraitBooleanLike {
-    template <class T>
-    static void putValue(JsonEncoder *encoder, T const &value) {
-        if (value) {
-            encoder->put("true", 4);
-        } else {
-            encoder->put("false", 5);
-        }
-    }
-
-    template <class T>
-    static bool getValue(JsonValue::Union &data, T &value,
-                         std::error_code &ec) {
-        if (auto p = std::get_if<JsonValue::Boolean>(&data)) {
-            value = *p;
-            return true;
-        } else {
-            ReflectorJsonDecode::typeMismatch("boolean", data, ec);
-            return false;
-        }
-    }
-};
-
-struct JsonTraitArithmeticLike {
-    template <class T>
-    static void putValue(JsonEncoder *encoder, T const &value) {
-        encoder->putArithmetic(value);
-    }
-
-    template <class T>
-    static bool getValue(JsonValue::Union &data, T &value,
-                         std::error_code &ec) {
-        if (auto p = std::get_if<JsonValue::Integer>(&data)) {
-            value = static_cast<T>(*p);
-            return true;
-        } else if (auto p = std::get_if<JsonValue::Real>(&data)) {
-            value = static_cast<T>(*p);
-            return true;
-        } else {
-            ReflectorJsonDecode::typeMismatch("integer or real", data, ec);
-            return false;
-        }
-    }
-};
-
-struct JsonTraitVariantLike {
-    template <class T>
-    static void putValue(JsonEncoder *encoder, T const &value) {
-        std::visit([&](auto const &arg) {
-            using Arg = std::decay_t<decltype(arg)>;
-            encoder->put('{');
-            encoder->putLiterialString("type");
-            encoder->put(':');
-            encoder->putLiterialString(Arg::name);
-            encoder->put(',');
-            encoder->putLiterialString("object");
-            encoder->put(':');
-            encoder->putValue(arg);
-            encoder->put('}');
-        }, value);
-    }
-
-    template <class T, std::size_t ...Is>
-    static bool getValueImpl(JsonValue::String const &name,
-                             JsonValue::Union &object, T &value,
-                             std::error_code &ec, std::index_sequence<Is...>) {
-        int ret = 0;
-        (void)((name == std::variant_alternative_t<Is, T>::name ?
-            (ret = (JsonTrait<std::variant_alternative_t<Is, T>>
-             ::getValue(object, value.template emplace<Is>(), ec) ? 2 : 1), true) :
-            false) || ...);
-        switch (ret) {
-            case 2: return true;
-            case 1: return false;
-            default:
-                ec = make_error_code(JsonError::InvalidVariantType);
-                return false;
-        }
-    }
-
-    template <class T>
-    static bool getValue(JsonValue::Union &data, T &value,
-                         std::error_code &ec) {
-        if (auto p = std::get_if<JsonValue::Dict>(&data)) {
-            if (auto type = p->find("type"); type == p->end()) {
-                ec = make_error_code(JsonError::InvalidVariantType);
-                return false;
-            } else if (auto object = p->find("object"); object == p->end()) {
-                ec = make_error_code(JsonError::InvalidVariantType);
-                return false;
-            } else if (auto p = std::get_if<JsonValue::String>(&type->second->inner)) {
-                if (!getValueImpl(*p, object->second->inner, value, ec,
-                                  std::make_index_sequence<std::variant_size_v<T>>())) {
-                    return false;
-                }
-                return true;
-            } else {
-                ec = make_error_code(JsonError::InvalidVariantType);
-                return false;
-            }
-        } else {
-            ReflectorJsonDecode::typeMismatch("object", data, ec);
-            return false;
-        }
-    }
-};
-
-struct JsonTraitJsonValueLike {
-    template <class T>
-    static void putValue(JsonEncoder *encoder, T const &value) {
-        encoder->putValue(value.inner);
-    }
-
-    template <class T>
-    static bool getValue(JsonValue::Union &data, JsonValue &value,
-                         std::error_code &ec) {
-        value.inner = std::move(data);
-        return true;
-    }
-};
-
-struct JsonTraitObjectLike {
-    template <class T>
-    static void putValue(JsonEncoder *encoder, T const &value) {
-        ReflectorJsonEncode reflector(encoder);
-        encoder->put('{');
-        reflect_members(reflector, const_cast<T &>(value));
-        encoder->put('}');
-    }
-
-    template <class T>
-    static bool getValue(JsonValue::Union &data, T &value,
-                         std::error_code &ec) {
-        if (auto p = std::get_if<JsonValue::Dict>(&data)) {
-            ReflectorJsonDecode reflector(p);
-            reflect_members(reflector, value);
-            if (reflector.failed) {
-                ec = reflector.ec;
-                return false;
-            }
-            return true;
-        } else {
-            ReflectorJsonDecode::typeMismatch("object", data, ec);
-            return false;
-        }
-    }
-};
-
-struct JsonTraitWrapperLike {
-    template <class T>
-    static void putValue(JsonEncoder *encoder, T const &value) {
-        return JsonTrait<typename T::value_type>::putValue(encoder, *value);
-    }
-
-    template <class T>
-    static bool getValue(JsonValue::Union &data, T &value,
-                         std::error_code &ec) {
-        return JsonTrait<typename T::value_type>::getValue(data, *value, ec);
-    }
-};
-
-template <>
-struct JsonTrait<JsonValue> {
-    template <class T>
-    static void putValue(JsonEncoder *encoder, T const &value) {
-        std::visit([&]<class U>(
-                       U const &arg) { JsonTrait<U>::getValue(encoder, arg); },
-                   value);
-    }
-
-    template <class T>
-    static bool getValue(JsonValue::Union &data, JsonValue &value,
-                         std::error_code &ec) {
-        value.inner = std::move(data);
-        return true;
-    }
-};
-
-template <class T>
-struct JsonTrait<T *> : JsonTraitPointerLike {};
-
-template <class T, class Deleter>
-struct JsonTrait<std::unique_ptr<T, Deleter>> : JsonTraitPointerLike {};
-
-template <class T>
-struct JsonTrait<std::shared_ptr<T>> : JsonTraitPointerLike {};
-
-template <class T, std::size_t N>
-struct JsonTrait<std::array<T, N>> : JsonTraitArrayLike {};
-
-template <class T, class Alloc>
-struct JsonTrait<std::vector<T, Alloc>> : JsonTraitArrayLike {};
-
-template <class K, class V, class Cmp, class Alloc>
-struct JsonTrait<std::map<K, V, Cmp, Alloc>> : JsonTraitDictLike {};
-
-template <class K, class V, class Hash, class Eq, class Alloc>
-struct JsonTrait<std::unordered_map<K, V, Hash, Eq, Alloc>>
-    : JsonTraitDictLike {};
-
-template <class Traits, class Alloc>
-struct JsonTrait<std::basic_string<char, Traits, Alloc>> : JsonTraitStringLike {
-};
-
-template <class Traits>
-struct JsonTrait<std::basic_string_view<char, Traits>> : JsonTraitStringLike {};
-
-template <class... Ts>
-struct JsonTrait<std::variant<Ts...>> : JsonTraitVariantLike {};
-
-template <class T>
-struct JsonTrait<std::optional<T>> : JsonTraitOptionalLike {};
-
-template <>
-struct JsonTrait<std::nullptr_t> : JsonTraitNullLike {};
-
-template <>
-struct JsonTrait<std::nullopt_t> : JsonTraitNullLike {};
-
-template <>
-struct JsonTrait<std::monostate> : JsonTraitNullLike {};
-
-template <>
-struct JsonTrait<bool> : JsonTraitBooleanLike {};
-
-/* template <class T> */
-/* struct JsonTrait<NoDefault<T>> : JsonTraitWrapperLike {}; */
-
-template <class T>
-struct JsonTrait<T, std::enable_if_t<std::is_arithmetic_v<T>>>
-    : JsonTraitArithmeticLike {};
-
-template <class Reflector, class T>
-inline std::void_t<
-    decltype(std::declval<T &>().REFLECT__MEMBERS(std::declval<Reflector &>()))>
-reflect_members(Reflector &reflector, T &value) {
-    value.REFLECT__MEMBERS(reflector);
-}
-
-template <class Reflector, class T,
-          class = std::void_t<decltype(REFLECT__MEMBERS(
-              std::declval<T &>(), std::declval<Reflector &>()))>>
-inline void reflect_members(Reflector &reflector, T &value) {
-    value.REFLECT__MEMBERS(value, reflector);
-}
-
-template <class T>
-struct JsonTrait<T, JsonValue> : JsonTraitJsonValueLike {};
-
-template <class T>
-struct JsonTrait<
-    T, std::void_t<decltype(reflect_members(
-           std::declval<ReflectorJsonEncode &>(), std::declval<T &>()))>>
-    : JsonTraitObjectLike {};
-
-template <class T>
-inline std::string json_encode(T const &value) {
-    JsonEncoder encoder;
-    encoder.putValue(value);
-    return encoder.json;
-}
-
-template <class T>
-inline bool json_decode(JsonValue &root, T &value, std::error_code &ec) {
-    return JsonTrait<T>::getValue(root.inner, value, ec);
-}
-
-template <class T>
-inline bool json_decode(std::string_view json, T &value, std::error_code &ec) {
-    auto root = jsonParse(json, ec);
-    if (!root) {
-        return false;
-    }
-    return json_decode(*root, value, ec);
-}
-
-template <class T>
-inline Expected<T> json_decode(JsonValue &root) {
-    T value{};
-    std::error_code ec;
-    if (!json_decode(root, value, ec)) [[unlikely]] {
-        return ec;
-    }
-    return std::move(value);
-}
-
-template <class T>
-inline Expected<T> json_decode(std::string_view json) {
-    T value{};
-    std::error_code ec;
-    if (!json_decode(json, value, ec)) [[unlikely]] {
-        return ec;
-    }
-    return std::move(value);
-}
-
-} // namespace co_async
-
-
-
-
-namespace co_async {
-
-template <class T>
-constexpr T bruteForceByteSwap(T value) {
-    if constexpr (sizeof(T) > 1) {
-        char* ptr = reinterpret_cast<char*>(&value);
-        for (size_t i = 0; i < sizeof(T) / 2; ++i) {
-            std::swap(ptr[i], ptr[sizeof(T) - 1 - i]);
-        }
-    }
-    return value;
-}
-
-template <class T>
-    requires (std::is_trivial_v<T> && !std::is_integral_v<T>)
-constexpr T byteswap(T value) {
-    return bruteForceByteSwap(value);
-}
-
-template <class T>
-    requires std::is_integral_v<T>
-constexpr T byteswap(T value) {
-#if __cpp_lib_byteswap
-    return std::byteswap(value);
-#elif defined(__GNUC__) && defined(__has_builtin)
-#if __has_builtin(__builtin_bswap)
-    return __builtin_bswap(value);
-#else
-    return bruteForceByteSwap(value);
-#endif
-#else
-    return brute_force_byteswap(value);
-#endif
-}
-
-#if __cpp_lib_endian // C++20 支持的 <bit> 头文件中可以方便地判断本地硬件的大小端
-inline constexpr bool is_little_endian = std::endian::native == std::endian::little;
-#else
-#if _MSC_VER
-#include <endian.h>
-#if defined(__BYTE_ORDER) && __BYTE_ORDER != 0 && __BYTE_ORDER == __BIG_ENDIAN
-inline constexpr bool is_little_endian = false;
-#else
-inline constexpr bool is_little_endian = true;
-#endif
-#else
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ != 0
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-inline constexpr bool is_little_endian = false;
-#elif __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-inline constexpr bool is_little_endian = true;
-#else
-inline constexpr bool is_little_endian = true;
-#endif
-#else
-inline constexpr bool is_little_endian = true;
-#endif
-#endif
-#endif
-
-template <class T>
-    requires std::is_trivial_v<T>
-constexpr T byteswap_if_little(T value) {
-    if constexpr (is_little_endian) {
-        return byteswap(value);
-    } else {
-        return value;
-    }
-}
-
-}
-
-
-
-
-namespace co_async {
-template <class T>
-struct PImplMethod {};
-
-template <class T>
-struct PImplConstruct {
-    static std::shared_ptr<T> construct();
-};
-
-#define StructPImpl(T) \
-    struct T; \
-    template <> \
-    struct PImplMethod<T>
-#define DefinePImpl(T) \
-    template <> \
-    std::shared_ptr<T> PImplConstruct<T>::construct() { \
-        return std::make_shared<T>(); \
-    }
-#define ForwardPImplMethod(T, func, args, ...) \
-    PImplMethod<T>::func args { \
-        return pimpl(this).func(__VA_ARGS__); \
-    }
-
-template <class T>
-struct PImpl : PImplMethod<T> {
-    PImpl()
-        requires(requires {
-            {
-                PImplConstruct<T>::construct()
-            } -> std::convertible_to<std::shared_ptr<T>>;
-        })
-        : mImpl(PImplConstruct<T>::construct()) {}
-
-    template <class... Args>
-        requires(sizeof...(Args) != 0 &&
-                 requires(Args &&...args) {
-                     {
-                         PImplConstruct<T>::construct(
-                             std::forward<Args>(args)...)
-                     } -> std::convertible_to<std::shared_ptr<T>>;
-                 })
-    explicit PImpl(Args &&...args)
-        : mImpl(PImplConstruct<T>::construct(std::forward<Args>(args)...)) {}
-
-    PImpl(std::nullptr_t) : mImpl(nullptr) {}
-
-    T &operator*() const noexcept {
-        return *mImpl;
-    }
-
-    T *operator->() const noexcept {
-        return mImpl.get();
-    }
-
-    T *impl() const noexcept {
-        return mImpl.get();
-    }
-
-    T *operator&() const noexcept {
-        return mImpl.get();
-    }
-
-    operator T &() const noexcept {
-        return *mImpl;
-    }
-
-    explicit operator bool() const noexcept {
-        return static_cast<bool>(mImpl);
-    }
 
 private:
-    std::shared_ptr<T> mImpl;
+    std::uint32_t const m_top_waiting;
+    FutexAtomic<std::uint32_t> m_num_waiting;
+    FutexAtomic<bool> m_sync_flip;
 };
-
-template <class T>
-T &pimpl(PImplMethod<T> const *that) {
-    return **static_cast<PImpl<T> const *>(that);
-}
-} // namespace co_async
-
-
-
-
-
-namespace co_async {
-
-template <class F>
-struct Finally {
-private:
-    F func;
-    bool enable;
-
-public:
-    Finally(std::nullptr_t = nullptr) : enable(false) {}
-
-    Finally(std::convertible_to<F> auto &&func)
-        : func(std::forward<decltype(func)>(func)),
-          enable(true) {}
-
-    Finally(Finally &&that) : func(std::move(that.func)), enable(that.enable) {
-        that.enable = false;
-    }
-
-    Finally &operator=(Finally &&that) {
-        if (this != &that) {
-            if (enable) {
-                func();
-            }
-            func = std::move(that.func);
-            enable = that.enable;
-            that.enable = false;
-        }
-        return *this;
-    }
-
-    void reset() {
-        if (enable) {
-            func();
-        }
-        enable = false;
-    }
-
-    void release() {
-        enable = false;
-    }
-
-    ~Finally() {
-        if (enable) {
-            func();
-        }
-    }
-};
-
-template <class F>
-Finally(F &&) -> Finally<std::decay_t<F>>;
 
 } // namespace co_async
-
-
-
-
-
-namespace co_async {
-template <class T>
-struct from_string_t;
-
-template <class Traits, class Alloc>
-struct from_string_t<std::basic_string<char, Traits, Alloc>> {
-    std::basic_string<char, Traits, Alloc>
-    operator()(std::string_view s) const {
-        return std::basic_string<char, Traits, Alloc>(s);
-    }
-};
-
-template <>
-struct from_string_t<std::string_view> {
-    std::string_view operator()(std::string_view s) const {
-        return s;
-    }
-};
-
-template <std::integral T>
-struct from_string_t<T> {
-    std::optional<T> operator()(std::string_view s, int base = 10) const {
-        T result;
-        auto [p, ec] =
-            std::from_chars(s.data(), s.data() + s.size(), result, base);
-        if (ec != std::errc()) [[unlikely]] {
-            return std::nullopt;
-        }
-        if (p != s.data() + s.size()) [[unlikely]] {
-            return std::nullopt;
-        }
-        return result;
-    }
-};
-
-template <std::floating_point T>
-struct from_string_t<T> {
-    std::optional<T>
-    operator()(std::string_view s,
-               std::chars_format fmt = std::chars_format::general) const {
-        T result;
-        auto [p, ec] =
-            std::from_chars(s.data(), s.data() + s.size(), result, fmt);
-        if (ec != std::errc()) [[unlikely]] {
-            return std::nullopt;
-        }
-        if (p != s.data() + s.size()) [[unlikely]] {
-            return std::nullopt;
-        }
-        return result;
-    }
-};
-template <class T>
-inline constexpr from_string_t<T> from_string;
-template <class T = void>
-struct to_string_t;
-
-template <>
-struct to_string_t<void> {
-    template <class U>
-    void operator()(String &result, U &&value) const {
-        to_string_t<std::decay_t<U>>()(result, std::forward<U>(value));
-    }
-
-    template <class U>
-    String operator()(U &&value) const {
-        String result;
-        operator()(result, std::forward<U>(value));
-        return result;
-    }
-};
-
-template <>
-struct to_string_t<String> {
-    template <class Traits, class Alloc>
-    void operator()(String &result,
-                    std::basic_string<char, Traits, Alloc> const &value) const {
-        result.assign(value);
-    }
-};
-
-template <>
-struct to_string_t<std::string_view> {
-    void operator()(String &result, std::string_view value) const {
-        result.assign(value);
-    }
-};
-
-template <std::integral T>
-struct to_string_t<T> {
-    void operator()(String &result, T value) const {
-        result.resize(std::numeric_limits<T>::digits10 + 2, '\0');
-        auto [p, ec] =
-            std::to_chars(result.data(), result.data() + result.size(), value);
-        if (ec != std::errc()) [[unlikely]] {
-            throw std::system_error(std::make_error_code(ec), "to_chars");
-        }
-        result.resize(std::size_t(p - result.data()));
-    }
-};
-
-template <std::floating_point T>
-struct to_string_t<T> {
-    void operator()(String &result, T value) const {
-        result.resize(std::numeric_limits<T>::max_digits10 + 2, '\0');
-        auto [p, ec] =
-            std::to_chars(result.data(), result.data() + result.size(), value);
-        if (ec != std::errc()) [[unlikely]] {
-            throw std::system_error(std::make_error_code(ec), "to_chars");
-        }
-        result.resize(p - result.data());
-    }
-};
-
-inline constexpr to_string_t<> to_string;
-
-inline String lower_string(std::string_view s) {
-    String ret;
-    ret.resize(s.size());
-    std::transform(s.begin(), s.end(), ret.begin(), [](char c) {
-        if (c >= 'A' && c <= 'Z') {
-            c += 'a' - 'A';
-        }
-        return c;
-    });
-    return ret;
-}
-
-inline String upper_string(std::string_view s) {
-    String ret;
-    ret.resize(s.size());
-    std::transform(s.begin(), s.end(), ret.begin(), [](char c) {
-        if (c >= 'a' && c <= 'z') {
-            c -= 'a' - 'A';
-        }
-        return c;
-    });
-    return ret;
-}
-
-inline String trim_string(std::string_view s,
-                          std::string_view trims = {" \t\r\n", 4}) {
-    auto pos = s.find_first_not_of(trims);
-    if (pos == std::string_view::npos) {
-        return {};
-    }
-    auto end = s.find_last_not_of(trims);
-    return String(s.substr(pos, end - pos + 1));
-}
-
-template <class Delim>
-struct SplitString {
-    SplitString(std::string_view s, Delim delimiter)
-        : s(s),
-          delimiter(delimiter) {}
-
-    struct sentinel {
-        explicit sentinel() = default;
-    };
-
-    struct iterator {
-        explicit iterator(std::string_view s, Delim delimiter) noexcept
-            : s(s),
-              delimiter(delimiter),
-              ended(false),
-              toBeEnded(false) {
-            find_next();
-        }
-
-        std::string_view operator*() const noexcept {
-            return current;
-        }
-
-        std::string_view rest() const noexcept {
-            return std::string_view{current.data(), current.size() + s.size()};
-        }
-
-        iterator &operator++() {
-            find_next();
-            return *this;
-        }
-
-        bool operator!=(sentinel) const noexcept {
-            return !ended;
-        }
-
-        bool operator==(sentinel) const noexcept {
-            return ended;
-        }
-
-        friend bool operator==(sentinel const &lhs,
-                               iterator const &rhs) noexcept {
-            return rhs == lhs;
-        }
-
-        friend bool operator!=(sentinel const &lhs,
-                               iterator const &rhs) noexcept {
-            return rhs != lhs;
-        }
-
-    private:
-        void find_next() {
-            auto pos = s.find(delimiter);
-            if (pos == std::string_view::npos) {
-                current = s;
-                s = {};
-                ended = toBeEnded;
-                toBeEnded = true;
-            } else {
-                current = s.substr(0, pos);
-                if constexpr (std::is_same_v<Delim, std::string_view>) {
-                    s = s.substr(pos + delimiter.size());
-                } else if constexpr (std::is_same_v<Delim, char>) {
-                    s = s.substr(pos + 1);
-                } else {
-                    static_assert(!std::is_void_v<std::void_t<Delim>>);
-                }
-            }
-        }
-
-        std::string_view s;
-        Delim delimiter;
-        std::string_view current;
-        bool ended;
-        bool toBeEnded;
-    };
-
-    iterator begin() const noexcept {
-        return iterator(s, delimiter);
-    }
-
-    sentinel end() const noexcept {
-        return sentinel();
-    }
-
-    std::vector<String> collect() const {
-        std::vector<String> result;
-        for (auto &&part: *this) {
-            result.emplace_back(part);
-        }
-        return result;
-    }
-
-    template <std::size_t N>
-        requires(N > 0)
-    std::array<String, N> collect() const {
-        std::array<String, N> result;
-        std::size_t i = 0;
-        for (auto it = begin(); it != end(); ++it, ++i) {
-            if (i + 1 >= N) {
-                result[i] = String(it.rest());
-                break;
-            }
-            result[i] = String(*it);
-        }
-        return result;
-    }
-
-private:
-    std::string_view s;
-    Delim delimiter;
-};
-
-inline SplitString<std::string_view> split_string(std::string_view s,
-                                                  std::string_view delimiter) {
-    return {s, delimiter};
-}
-
-inline SplitString<char> split_string(std::string_view s, char delimiter) {
-    return {s, delimiter};
-}
-} // namespace co_async
-
-
-
-
-namespace co_async {
-
-inline uint32_t getSeedByTime() {
-    return static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
-}
-
-inline uint32_t getSecureSeed() {
-    return std::random_device{}();
-}
-
-inline uint32_t wangsHash(uint32_t x) noexcept {
-    x = (x ^ 61) ^ (x >> 16);
-    x *= 9;
-    x = x ^ (x >> 4);
-    x *= 0x27d4eb2d;
-    x = x ^ (x >> 15);
-    return x;
-}
-
-struct WangsHash {
-    using result_type = uint32_t;
-
-    result_type mSeed;
-
-    WangsHash(result_type seed) noexcept : mSeed(seed) {
-    }
-
-    void seed(result_type seed) noexcept {
-        mSeed = seed;
-    }
-
-    result_type operator()() noexcept {
-        mSeed = wangsHash(mSeed);
-        return mSeed;
-        std::mt19937 mt;
-        mt.discard(1);
-    }
-
-    static result_type max() noexcept {
-        return std::numeric_limits<result_type>::max();
-    }
-
-    static result_type min() noexcept {
-        return std::numeric_limits<result_type>::min();
-    }
-};
-
-}
-
-
-
-
-
-
-#include <dirent.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
-namespace co_async {
-struct [[nodiscard]] FileHandle {
-    FileHandle() noexcept : mFileNo(-1) {}
-
-    explicit FileHandle(int fileNo) noexcept : mFileNo(fileNo) {}
-
-    int fileNo() const noexcept {
-        return mFileNo;
-    }
-
-    int releaseFile() noexcept {
-        int ret = mFileNo;
-        mFileNo = -1;
-        return ret;
-    }
-
-    explicit operator bool() noexcept {
-        return mFileNo != -1;
-    }
-
-    FileHandle(FileHandle &&that) noexcept : mFileNo(that.releaseFile()) {}
-
-    FileHandle &operator=(FileHandle &&that) noexcept {
-        std::swap(mFileNo, that.mFileNo);
-        return *this;
-    }
-
-    ~FileHandle() {
-        if (mFileNo != -1) {
-            close(mFileNo);
-        }
-    }
-
-protected:
-    int mFileNo;
-};
-
-struct FileStat {
-    struct statx *getNativeStatx() {
-        return &mStatx;
-    }
-
-    std::uint64_t size() const noexcept {
-        return mStatx.stx_size;
-    }
-
-    std::uint64_t num_blocks() const noexcept {
-        return mStatx.stx_blocks;
-    }
-
-    mode_t mode() const noexcept {
-        return mStatx.stx_mode;
-    }
-
-    unsigned int uid() const noexcept {
-        return mStatx.stx_uid;
-    }
-
-    unsigned int gid() const noexcept {
-        return mStatx.stx_gid;
-    }
-
-    bool is_directory() const noexcept {
-        return (mStatx.stx_mode & S_IFDIR) != 0;
-    }
-
-    bool is_regular_file() const noexcept {
-        return (mStatx.stx_mode & S_IFREG) != 0;
-    }
-
-    bool is_symlink() const noexcept {
-        return (mStatx.stx_mode & S_IFLNK) != 0;
-    }
-
-    bool is_readable() const noexcept {
-        return (mStatx.stx_mode & S_IRUSR) != 0;
-    }
-
-    bool is_writable() const noexcept {
-        return (mStatx.stx_mode & S_IWUSR) != 0;
-    }
-
-    bool is_executable() const noexcept {
-        return (mStatx.stx_mode & S_IXUSR) != 0;
-    }
-
-    std::chrono::system_clock::time_point accessed_time() const {
-        return statTimestampToTimePoint(mStatx.stx_atime);
-    }
-
-    std::chrono::system_clock::time_point attribute_changed_time() const {
-        return statTimestampToTimePoint(mStatx.stx_ctime);
-    }
-
-    std::chrono::system_clock::time_point created_time() const {
-        return statTimestampToTimePoint(mStatx.stx_btime);
-    }
-
-    std::chrono::system_clock::time_point modified_time() const {
-        return statTimestampToTimePoint(mStatx.stx_mtime);
-    }
-
-private:
-    struct statx mStatx;
-
-    static std::chrono::system_clock::time_point
-    statTimestampToTimePoint(struct statx_timestamp const &time) {
-        return std::chrono::system_clock::time_point(
-            std::chrono::seconds(time.tv_sec) +
-            std::chrono::nanoseconds(time.tv_nsec));
-    }
-};
-
-#if CO_ASYNC_DIRECT
-static constexpr size_t kOpenModeDefaultFlags =
-    O_LARGEFILE | O_CLOEXEC | O_DIRECT;
-#else
-static constexpr size_t kOpenModeDefaultFlags = O_LARGEFILE | O_CLOEXEC;
-#endif
-
-enum class OpenMode : int {
-    Read = O_RDONLY | kOpenModeDefaultFlags,
-    Write = O_WRONLY | O_TRUNC | O_CREAT | kOpenModeDefaultFlags,
-    ReadWrite = O_RDWR | O_CREAT | kOpenModeDefaultFlags,
-    Append = O_WRONLY | O_APPEND | O_CREAT | kOpenModeDefaultFlags,
-    Directory = O_RDONLY | O_DIRECTORY | kOpenModeDefaultFlags,
-};
-
-inline std::filesystem::path make_path(std::string_view path) {
-    return std::filesystem::path(
-        reinterpret_cast<char8_t const *>(std::string(path).c_str()));
-}
-
-template <std::convertible_to<std::string_view>... Ts>
-    requires(sizeof...(Ts) >= 2)
-inline std::filesystem::path make_path(Ts &&...chunks) {
-    return (make_path(chunks) / ...);
-}
-
-inline Task<Expected<FileHandle>> fs_open(std::filesystem::path path, OpenMode mode,
-                                          mode_t access = 0644) {
-    int oflags = static_cast<int>(mode);
-    int fd = co_await expectError(co_await UringOp().prep_openat(
-        AT_FDCWD, path.c_str(), oflags, access))
-#if CO_ASYNC_INVALFIX
-        .or_else(std::errc::bad_file_descriptor, [&] { return expectError(open(path.c_str(), oflags, access)); })
-#endif
-        ;
-    FileHandle file(fd);
-    co_return file;
-}
-
-inline Task<Expected<FileHandle>> fs_openat(FileHandle dir,
-                                            std::filesystem::path path,
-                                            OpenMode mode,
-                                            mode_t access = 0644) {
-    int oflags = static_cast<int>(mode);
-    int fd = co_await expectError(co_await UringOp().prep_openat(
-        dir.fileNo(), path.c_str(), oflags, access))
-#if CO_ASYNC_INVALFIX
-        .or_else(std::errc::bad_file_descriptor, [&] { return expectError(openat(dir.fileNo(), path.c_str(), oflags, access)); })
-#endif
-        ;
-    FileHandle file(fd);
-    co_return file;
-}
-
-inline Task<Expected<>> fs_close(FileHandle file) {
-    co_await expectError(co_await UringOp().prep_close(file.fileNo()));
-    file.releaseFile();
-    co_return {};
-}
-
-inline Task<Expected<>> fs_mkdir(std::filesystem::path path, mode_t access = 0755) {
-    co_await expectError(
-        co_await UringOp().prep_mkdirat(AT_FDCWD, path.c_str(), access));
-    co_return {};
-}
-
-inline Task<Expected<>> fs_link(std::filesystem::path oldpath, std::filesystem::path newpath) {
-    co_await expectError(
-        co_await UringOp().prep_linkat(AT_FDCWD, oldpath.c_str(),
-                                       AT_FDCWD, newpath.c_str(), 0));
-    co_return {};
-}
-
-inline Task<Expected<>> fs_symlink(std::filesystem::path target, std::filesystem::path linkpath) {
-    co_await expectError(co_await UringOp().prep_symlinkat(
-        target.c_str(), AT_FDCWD, linkpath.c_str()));
-    co_return {};
-}
-
-inline Task<Expected<>> fs_unlink(std::filesystem::path path) {
-    co_await expectError(
-        co_await UringOp().prep_unlinkat(AT_FDCWD, path.c_str(), 0));
-    co_return {};
-}
-
-inline Task<Expected<>> fs_rmdir(std::filesystem::path path) {
-    co_await expectError(co_await UringOp().prep_unlinkat(
-        AT_FDCWD, path.c_str(), AT_REMOVEDIR));
-    co_return {};
-}
-
-inline Task<Expected<FileStat>>
-fs_stat(std::filesystem::path path, unsigned int mask = STATX_BASIC_STATS | STATX_BTIME, int flags = 0) {
-    FileStat ret;
-    co_await expectError(co_await UringOp().prep_statx(
-        AT_FDCWD, path.c_str(), flags, mask, ret.getNativeStatx()))
-#if CO_ASYNC_INVALFIX
-            .or_else(std::errc::bad_file_descriptor, [&] { return expectError(statx(AT_FDCWD, path.c_str(), flags, mask, ret.getNativeStatx())); })
-#endif
-            ;
-    co_return ret;
-}
-
-inline Task<Expected<std::size_t>>
-fs_read(FileHandle &file, std::span<char> buffer,
-        std::uint64_t offset = static_cast<std::uint64_t>(-1)) {
-    co_return static_cast<std::size_t>(
-        co_await expectError(
-            co_await UringOp().prep_read(file.fileNo(), buffer, offset))
-#if CO_ASYNC_INVALFIX
-            .or_else(std::errc::invalid_argument,
-                      [&] {
-                          if (offset == static_cast<std::uint64_t>(-1)) {
-                              return expectError(static_cast<int>(read(
-                                  file.fileNo(), buffer.data(), buffer.size())));
-                          } else {
-                              return expectError(static_cast<int>(pread64(
-                                  file.fileNo(), buffer.data(), buffer.size(),
-                                  static_cast<__off64_t>(offset))));
-                          }
-                      })
-#endif
-    );
-}
-
-inline Task<Expected<std::size_t>>
-fs_write(FileHandle &file, std::span<char const> buffer,
-         std::uint64_t offset = static_cast<std::uint64_t>(-1)) {
-    co_return static_cast<std::size_t>(
-        co_await expectError(
-            co_await UringOp().prep_write(file.fileNo(), buffer, offset))
-#if CO_ASYNC_INVALFIX
-            .or_else(std::errc::invalid_argument,
-                      [&] {
-                          if (offset == static_cast<std::uint64_t>(-1)) {
-                              return expectError(static_cast<int>(write(
-                                  file.fileNo(), buffer.data(), buffer.size())));
-                          } else {
-                              return expectError(static_cast<int>(pwrite64(
-                                  file.fileNo(), buffer.data(), buffer.size(),
-                                  static_cast<__off64_t>(offset))));
-                          }
-                      })
-#endif
-    );
-}
-
-inline Task<Expected<std::size_t>>
-fs_read(FileHandle &file, std::span<char> buffer, CancelToken cancel,
-        std::uint64_t offset = static_cast<std::uint64_t>(-1)) {
-    co_return static_cast<std::size_t>(
-        co_await expectError(co_await UringOp()
-                                 .prep_read(file.fileNo(), buffer, offset)
-                                 .cancelGuard(cancel))
-#if CO_ASYNC_INVALFIX
-            .or_else(std::errc::invalid_argument,
-                      [&] {
-                          if (offset == static_cast<std::uint64_t>(-1)) {
-                              return expectError(static_cast<int>(read(
-                                  file.fileNo(), buffer.data(), buffer.size())));
-                          } else {
-                              return expectError(static_cast<int>(pread64(
-                                  file.fileNo(), buffer.data(), buffer.size(),
-                                  static_cast<__off64_t>(offset))));
-                          }
-                      })
-#endif
-    );
-}
-
-inline Task<Expected<std::size_t>>
-fs_write(FileHandle &file, std::span<char const> buffer, CancelToken cancel,
-         std::uint64_t offset = static_cast<std::uint64_t>(-1)) {
-    co_return static_cast<std::size_t>(
-        co_await expectError(co_await UringOp()
-                                 .prep_write(file.fileNo(), buffer, offset)
-                                 .cancelGuard(cancel))
-#if CO_ASYNC_INVALFIX
-            .or_else(std::errc::invalid_argument,
-                      [&] {
-                          if (offset == static_cast<std::uint64_t>(-1)) {
-                              return expectError(static_cast<int>(write(
-                                  file.fileNo(), buffer.data(), buffer.size())));
-                          } else {
-                              return expectError(static_cast<int>(pwrite64(
-                                  file.fileNo(), buffer.data(), buffer.size(),
-                                  static_cast<__off64_t>(offset))));
-                          }
-                      })
-#endif
-    );
-}
-
-inline Task<Expected<>> fs_truncate(FileHandle &file, std::uint64_t size = 0) {
-    co_await expectError(co_await UringOp().prep_ftruncate(
-        file.fileNo(), static_cast<loff_t>(size)));
-    co_return {};
-}
-
-inline Task<Expected<std::size_t>>
-fs_splice(FileHandle &fileIn, FileHandle &fileOut, std::size_t size,
-          std::int64_t offsetIn = -1, std::int64_t offsetOut = -1) {
-    co_return static_cast<std::size_t>(
-        co_await expectError(co_await UringOp().prep_splice(
-            fileIn.fileNo(), offsetIn, fileOut.fileNo(), offsetOut, size, 0)));
-}
-
-inline Task<Expected<std::size_t>> fs_getdents(FileHandle &dirFile,
-                                               std::span<char> buffer) {
-    int res = static_cast<int>(
-        getdents64(dirFile.fileNo(), buffer.data(), buffer.size()));
-    if (res < 0) [[unlikely]] {
-        res = -errno;
-    }
-    co_return static_cast<std::size_t>(co_await expectError(res));
-}
-
-inline Task<int> fs_nop() {
-    co_return co_await UringOp().prep_nop();
-}
-
-inline Task<Expected<>> fs_cancel_fd(FileHandle &file) {
-    co_await expectError(co_await UringOp().prep_cancel_fd(
-        file.fileNo(), IORING_ASYNC_CANCEL_FD | IORING_ASYNC_CANCEL_ALL));
-    co_return {};
-}
-} // namespace co_async
-
-
-
-
-
-
-#if CO_ASYNC_ALLOC
-struct BytesBuffer {
-private:
-    struct Deleter {
-        std::size_t mSize;
-        std::pmr::memory_resource *mResource;
-
-        void operator()(char *p) noexcept {
-            mResource->deallocate(p, mSize);
-        }
-    };
-
-    std::unique_ptr<char[], Deleter> mData;
-
-public:
-    BytesBuffer() noexcept = default;
-
-    explicit BytesBuffer(std::size_t size,
-                         std::pmr::polymorphic_allocator<> alloc = {})
-        : mData(reinterpret_cast<char *>(alloc.resource()->allocate(size)),
-                Deleter{size, alloc.resource()}) {}
-
-    void allocate(std::size_t size,
-                  std::pmr::polymorphic_allocator<> alloc = {}) {
-        std::pmr::memory_resource *resource = alloc.resource();
-        mData.reset(reinterpret_cast<char *>(resource->allocate(size)));
-        mData.get_deleter() = {size, resource};
-    }
-
-    char *data() const noexcept {
-        return mData.get();
-    }
-
-    std::size_t size() const noexcept {
-        return mData.get_deleter().mSize;
-    }
-
-    explicit operator bool() const noexcept {
-        return (bool)mData;
-    }
-
-    char &operator[](std::size_t index) const noexcept {
-        return mData[index];
-    }
-
-    operator std::span<char>() const noexcept {
-        return {data(), size()};
-    }
-};
-#else
-// struct BytesBuffer {
-// private:
-//     std::unique_ptr<char[]> mData;
-//     std::size_t mSize = 0;
-//
-// public:
-//     BytesBuffer() noexcept = default;
-//
-//     explicit BytesBuffer(std::size_t size) :
-//     mData(std::make_unique<char[]>(size)), mSize(size) {}
-//
-//     void allocate(std::size_t size) {
-//         mData = std::make_unique<char[]>(size);
-//         mSize = size;
-//     }
-//
-//     char *data() const noexcept {
-//         return mData.get();
-//     }
-//
-//     std::size_t size() const noexcept {
-//         return mSize;
-//     }
-//
-//     explicit operator bool() const noexcept {
-//         return static_cast<bool>(mData);
-//     }
-//
-//     char &operator[](std::size_t index) const noexcept {
-//         return mData[index];
-//     }
-//
-//     operator std::span<char>() const noexcept {
-//         return {data(), size()};
-//     }
-// };
-struct BytesBuffer {
-private:
-    char *mData;
-    std::size_t mSize;
-
-# if __unix__
-    void *pageAlignedAlloc(size_t n) {
-        return valloc(n);
-    }
-
-    void pageAlignedFree(void *p, size_t) {
-        free(p);
-    }
-# elif _WIN32
-    __ void *pageAlignedAlloc(size_t n) {
-        return _aligned_malloc(n, 4096);
-    }
-
-    void pageAlignedFree(void *p, size_t) {
-        _aligned_free(p);
-    }
-# else
-    void *pageAlignedAlloc(size_t n) {
-        return malloc(n);
-    }
-
-    void pageAlignedFree(void *p, size_t) {
-        free(p);
-    }
-# endif
-
-public:
-    BytesBuffer() noexcept : mData(nullptr), mSize(0) {}
-
-    explicit BytesBuffer(std::size_t size)
-        : mData(static_cast<char *>(pageAlignedAlloc(size))),
-          mSize(size) {}
-
-    BytesBuffer(BytesBuffer &&that) noexcept
-        : mData(that.mData),
-          mSize(that.mSize) {
-        that.mData = nullptr;
-        that.mSize = 0;
-    }
-
-    BytesBuffer &operator=(BytesBuffer &&that) noexcept {
-        if (this != &that) {
-            pageAlignedFree(mData, mSize);
-            mData = that.mData;
-            mSize = that.mSize;
-            that.mData = nullptr;
-            that.mSize = 0;
-        }
-        return *this;
-    }
-
-    ~BytesBuffer() noexcept {
-        pageAlignedFree(mData, mSize);
-    }
-
-    void allocate(std::size_t size) {
-        mData = static_cast<char *>(pageAlignedAlloc(size));
-        mSize = size;
-    }
-
-    char *data() const noexcept {
-        return mData;
-    }
-
-    std::size_t size() const noexcept {
-        return mSize;
-    }
-
-    explicit operator bool() const noexcept {
-        return static_cast<bool>(mData);
-    }
-
-    char &operator[](std::size_t index) const noexcept {
-        return mData[index];
-    }
-
-    operator std::span<char>() const noexcept {
-        return {data(), size()};
-    }
-};
-#endif
-
-
-
-
-
-
-
-
-namespace co_async {
-inline constexpr std::size_t kStreamBufferSize = 8192;
-
-inline std::error_code eofError() {
-    static struct final : public std::error_category {
-        const char *name() const noexcept override {
-            return "eof";
-        }
-        std::string message(int) const override {
-            return "End of file";
-        }
-    } category;
-    return std::error_code(1, category);
-}
-
-struct Stream {
-    virtual void raw_timeout(std::chrono::steady_clock::duration timeout) {}
-
-    virtual Task<Expected<>> raw_seek(std::uint64_t pos) {
-        co_return std::errc::invalid_seek;
-    }
-
-    virtual Task<Expected<>> raw_flush() {
-        co_return {};
-    }
-
-    virtual Task<> raw_close() {
-        co_return;
-    }
-
-    virtual Task<Expected<std::size_t>> raw_read(std::span<char> buffer) {
-        co_return std::errc::not_supported;
-    }
-
-    virtual Task<Expected<std::size_t>>
-    raw_write(std::span<char const> buffer) {
-        co_return std::errc::not_supported;
-    }
-
-    Stream &operator=(Stream &&) = delete;
-    virtual ~Stream() = default;
-};
-
-struct BorrowedStream {
-    BorrowedStream() : mRaw() {}
-
-    explicit BorrowedStream(Stream *raw) : mRaw(raw) {}
-
-    virtual ~BorrowedStream() = default;
-    BorrowedStream(BorrowedStream &&) = default;
-    BorrowedStream &operator=(BorrowedStream &&) = default;
-
-    Task<Expected<char>> getchar() {
-        if (bufempty()) {
-            mInEnd = mInIndex = 0;
-            co_await co_await fillbuf();
-        }
-        char c = mInBuffer[mInIndex];
-        ++mInIndex;
-        co_return c;
-    }
-
-    Task<Expected<>> getline(String &s, char eol) {
-        std::size_t start = mInIndex;
-        while (true) {
-            for (std::size_t i = start; i < mInEnd; ++i) {
-                if (mInBuffer[i] == eol) {
-                    s.append(mInBuffer.data() + start, i - start);
-                    mInIndex = i + 1;
-                    co_return {};
-                }
-            }
-            s.append(mInBuffer.data() + start, mInEnd - start);
-            mInEnd = mInIndex = 0;
-            co_await co_await fillbuf();
-            start = 0;
-        }
-    }
-
-    Task<Expected<>> dropline(char eol) {
-        std::size_t start = mInIndex;
-        while (true) {
-            for (std::size_t i = start; i < mInEnd; ++i) {
-                if (mInBuffer[i] == eol) {
-                    mInIndex = i + 1;
-                    co_return {};
-                }
-            }
-            mInEnd = mInIndex = 0;
-            co_await co_await fillbuf();
-            start = 0;
-        }
-    }
-
-    Task<Expected<>> getline(String &s, std::string_view eol) {
-    again:
-        co_await co_await getline(s, eol.front());
-        for (std::size_t i = 1; i < eol.size(); ++i) {
-            if (bufempty()) {
-                mInEnd = mInIndex = 0;
-                co_await co_await fillbuf();
-            }
-            char c = mInBuffer[mInIndex];
-            if (eol[i] == c) [[likely]] {
-                ++mInIndex;
-            } else {
-                s.append(eol.data(), i);
-                goto again;
-            }
-        }
-        co_return {};
-    }
-
-    Task<Expected<>> dropline(std::string_view eol) {
-    again:
-        co_await co_await dropline(eol.front());
-        for (std::size_t i = 1; i < eol.size(); ++i) {
-            if (bufempty()) {
-                mInEnd = mInIndex = 0;
-                co_await co_await fillbuf();
-            }
-            char c = mInBuffer[mInIndex];
-            if (eol[i] == c) [[likely]] {
-                ++mInIndex;
-            } else {
-                goto again;
-            }
-        }
-        co_return {};
-    }
-
-    Task<Expected<String>> getline(char eol) {
-        String s;
-        co_await co_await getline(s, eol);
-        co_return s;
-    }
-
-    Task<Expected<String>> getline(std::string_view eol) {
-        String s;
-        co_await co_await getline(s, eol);
-        co_return s;
-    }
-
-    Task<Expected<>> getspan(std::span<char> s) {
-        auto p = s.data();
-        auto n = s.size();
-        std::size_t start = mInIndex;
-        while (true) {
-            auto end = start + n;
-            if (end <= mInEnd) {
-                p = std::copy(mInBuffer.data() + start, mInBuffer.data() + end,
-                              p);
-                mInIndex = end;
-                co_return {};
-            }
-            p = std::copy(mInBuffer.data() + start, mInBuffer.data() + mInEnd,
-                          p);
-            mInEnd = mInIndex = 0;
-            co_await co_await fillbuf();
-            start = 0;
-        }
-    }
-
-    Task<Expected<>> dropn(std::size_t n) {
-        auto start = mInIndex;
-        while (true) {
-            auto end = start + n;
-            if (end <= mInEnd) {
-                mInIndex = end;
-                co_return {};
-            }
-            auto m = mInEnd - mInIndex;
-            n -= m;
-            mInEnd = mInIndex = 0;
-            co_await co_await fillbuf();
-            start = 0;
-        }
-    }
-
-    Task<Expected<>> getn(String &s, std::size_t n) {
-        auto start = mInIndex;
-        while (true) {
-            auto end = start + n;
-            if (end <= mInEnd) {
-                s.append(mInBuffer.data() + mInIndex, n);
-                mInIndex = end;
-                co_return {};
-            }
-            auto m = mInEnd - mInIndex;
-            n -= m;
-            s.append(mInBuffer.data() + mInIndex, m);
-            mInEnd = mInIndex = 0;
-            co_await co_await fillbuf();
-            start = 0;
-        }
-    }
-
-    Task<Expected<String>> getn(std::size_t n) {
-        String s;
-        s.reserve(n);
-        co_await co_await getn(s, n);
-        co_return s;
-    }
-
-    Task<Expected<>> dropall() {
-        do {
-            mInEnd = mInIndex = 0;
-        } while (co_await (co_await fillbuf()).transform([] { return true; }).or_else(eofError(), [] { return false; }));
-        co_return {};
-    }
-
-    Task<Expected<>> getall(String &s) {
-        std::size_t start = mInIndex;
-        do {
-            s.append(mInBuffer.data() + start, mInEnd - start);
-            start = 0;
-            mInEnd = mInIndex = 0;
-        } while (co_await (co_await fillbuf()).transform([] { return true; }).or_else(eofError(), [] { return false; }));
-        co_return {};
-    }
-
-    Task<Expected<String>> getall() {
-        String s;
-        co_await co_await getall(s);
-        co_return s;
-    }
-
-    template <class T>
-        requires std::is_trivial_v<T>
-    Task<Expected<>> getstruct(T &ret) {
-        return getspan(
-            std::span<char>(reinterpret_cast<char *>(&ret), sizeof(T)));
-    }
-
-    template <class T>
-        requires std::is_trivial_v<T>
-    Task<Expected<T>> getstruct() {
-        T ret;
-        co_await co_await getstruct(ret);
-        co_return ret;
-    }
-
-    std::span<char const> peekbuf() const noexcept {
-        return {mInBuffer.data() + mInIndex, mInEnd - mInIndex};
-    }
-
-    void seenbuf(std::size_t n) noexcept {
-        mInIndex += n;
-    }
-
-    Task<Expected<String>> getchunk() noexcept {
-        if (bufempty()) {
-            mInEnd = mInIndex = 0;
-            co_await co_await fillbuf();
-        }
-        auto buf = peekbuf();
-        String ret(buf.data(), buf.size());
-        seenbuf(buf.size());
-        co_return std::move(ret);
-    }
-
-    std::size_t tryread(std::span<char> buffer) {
-        auto peekBuf = peekbuf();
-        std::size_t n = std::min(buffer.size(), peekBuf.size());
-        std::memcpy(buffer.data(), peekBuf.data(), n);
-        seenbuf(n);
-        return n;
-    }
-
-    Task<Expected<char>> peekchar() {
-        if (bufempty()) {
-            mInEnd = mInIndex = 0;
-            co_await co_await fillbuf();
-        }
-        co_return mInBuffer[mInIndex];
-    }
-
-    Task<Expected<>> peekn(String &s, std::size_t n) {
-        if (mInBuffer.size() - mInIndex < n) {
-            if (mInBuffer.size() < n) [[unlikely]] {
-                co_return std::errc::value_too_large;
-            }
-            std::memmove(mInBuffer.data(), mInBuffer.data() + mInIndex,
-                         mInEnd - mInIndex);
-            mInEnd -= mInIndex;
-            mInIndex = 0;
-        }
-        while (mInEnd - mInIndex < n) {
-            co_await co_await fillbuf();
-        }
-        s.append(mInBuffer.data() + mInIndex, n);
-        co_return {};
-    }
-
-    Task<Expected<String>> peekn(std::size_t n) {
-        String s;
-        co_await co_await peekn(s, n);
-        co_return s;
-    }
-
-    void allocinbuf(std::size_t size) {
-        if (!mInBuffer) [[likely]] {
-            mInBuffer.allocate(size);
-            mInIndex = 0;
-            mInEnd = 0;
-        }
-    }
-
-    Task<Expected<>> fillbuf() {
-        if (!mInBuffer) {
-            allocinbuf(kStreamBufferSize);
-        }
-        // #if CO_ASYNC_DEBUG
-        //         if (!bufempty()) [[unlikely]] {
-        //             throw std::logic_error("buf must be empty before
-        //             fillbuf");
-        //         }
-        // #endif
-        auto n = co_await co_await mRaw->raw_read(std::span(
-            mInBuffer.data() + mInIndex, mInBuffer.size() - mInIndex));
-        // auto n = co_await co_await mRaw->raw_read(mInBuffer);
-        if (n == 0) [[unlikely]] {
-            co_return eofError();
-        }
-        mInEnd = mInIndex + n;
-        co_return {};
-    }
-
-    bool bufempty() const noexcept {
-        return mInIndex == mInEnd;
-    }
-
-    Task<Expected<>> putchar(char c) {
-        if (buffull()) {
-            co_await co_await flush();
-        }
-        mOutBuffer[mOutIndex] = c;
-        ++mOutIndex;
-        co_return {};
-    }
-
-    Task<Expected<>> putspan(std::span<char const> s) {
-        auto p = s.data();
-        auto const pe = s.data() + s.size();
-    again:
-        if (std::size_t(pe - p) <= mOutBuffer.size() - mOutIndex) {
-            auto b = mOutBuffer.data() + mOutIndex;
-            mOutIndex += std::size_t(pe - p);
-            while (p < pe) {
-                *b++ = *p++;
-            }
-        } else {
-            auto b = mOutBuffer.data() + mOutIndex;
-            auto const be = mOutBuffer.data() + mOutBuffer.size();
-            mOutIndex = mOutBuffer.size();
-            while (b < be) {
-                *b++ = *p++;
-            }
-            co_await co_await flush();
-            mOutIndex = 0;
-            goto again;
-        }
-        co_return {};
-    }
-
-    std::size_t trywrite(std::span<char const> s) {
-        if (!mOutBuffer) {
-            allocoutbuf(kStreamBufferSize);
-        }
-        auto p = s.data();
-        auto const pe = s.data() + s.size();
-        auto nMax = mOutBuffer.size() - mOutIndex;
-        auto n = std::size_t(pe - p);
-        if (n <= nMax) {
-            auto b = mOutBuffer.data() + mOutIndex;
-            mOutIndex += std::size_t(pe - p);
-            while (p < pe) {
-                *b++ = *p++;
-            }
-            return n;
-        } else {
-            auto b = mOutBuffer.data() + mOutIndex;
-            auto const be = mOutBuffer.data() + mOutBuffer.size();
-            mOutIndex = mOutBuffer.size();
-            while (b < be) {
-                *b++ = *p++;
-            }
-            return nMax;
-        }
-    }
-
-    Task<Expected<>> puts(std::string_view s) {
-        return putspan(std::span<char const>(s.data(), s.size()));
-    }
-
-    template <class T>
-    Task<Expected<>> putstruct(T const &s) {
-        return putspan(std::span<char const>(
-            reinterpret_cast<char const *>(std::addressof(s)), sizeof(T)));
-    }
-
-    Task<Expected<>> putchunk(std::string_view s) {
-        co_await co_await puts(s);
-        co_return co_await flush();
-    }
-
-    Task<Expected<>> putline(std::string_view s) {
-        co_await co_await puts(s);
-        co_await co_await putchar('\n');
-        co_return co_await flush();
-    }
-
-    void allocoutbuf(std::size_t size) {
-        if (!mOutBuffer) [[likely]] {
-            mOutBuffer.allocate(size);
-            mOutIndex = 0;
-        }
-    }
-
-    Task<Expected<>> flush() {
-        if (!mOutBuffer) {
-            allocoutbuf(kStreamBufferSize);
-            co_return {};
-        }
-        if (mOutIndex) [[likely]] {
-            auto buf = std::span(mOutBuffer.data(), mOutIndex);
-            auto len = co_await mRaw->raw_write(buf);
-            while (len.has_value() && *len > 0 && *len != buf.size()) {
-                buf = buf.subspan(*len);
-                len = co_await mRaw->raw_write(buf);
-            }
-            if (len.has_error()) [[unlikely]] {
-#if CO_ASYNC_DEBUG
-                co_return {len.error(), len.mErrorLocation};
-#else
-                co_return len.error();
-#endif
-            }
-            if (*len == 0) [[unlikely]] {
-                co_return eofError();
-            }
-            mOutIndex = 0;
-            co_await co_await mRaw->raw_flush();
-        }
-        co_return {};
-    }
-
-    bool buffull() const noexcept {
-        return mOutIndex == mOutBuffer.size();
-    }
-
-    Stream &raw() const noexcept {
-        return *mRaw;
-    }
-
-    template <std::derived_from<Stream> Derived>
-    Derived &raw() const {
-        return dynamic_cast<Derived &>(*mRaw);
-    }
-
-    Task<> close() {
-#if CO_ASYNC_DEBUG
-        if (mOutIndex) [[unlikely]] {
-            std::cerr << "WARNING: stream closed with buffer not flushed\n";
-        }
-#endif
-        return mRaw->raw_close();
-    }
-
-    Task<Expected<std::size_t>> read(std::span<char> buffer) {
-        if (!bufempty()) {
-            auto n = std::min(mInEnd - mInIndex, buffer.size());
-            std::memcpy(buffer.data(), mInBuffer.data() + mInIndex, n);
-            mInIndex += n;
-            co_return n;
-        }
-        co_return co_await mRaw->raw_read(buffer);
-    }
-
-    Task<Expected<std::size_t>> read(void *buffer, std::size_t len) {
-        return read(std::span<char>(static_cast<char *>(buffer), len));
-    }
-
-    std::size_t tryread(void *buffer, std::size_t len) {
-        return tryread(std::span<char>(static_cast<char *>(buffer), len));
-    }
-
-    Task<Expected<std::size_t>> write(std::span<char const> buffer) {
-        if (!buffull()) {
-            auto n = std::min(mInBuffer.size() - mInIndex, buffer.size());
-            co_await co_await putspan(buffer.subspan(0, n));
-            co_return n;
-        }
-        co_return co_await mRaw->raw_write(buffer);
-    }
-
-    Task<Expected<std::size_t>> write(void const *buffer, std::size_t len) {
-        return write(
-            std::span<char const>(static_cast<char const *>(buffer), len));
-    }
-
-    Task<Expected<>> putspan(void const *buffer, std::size_t len) {
-        return putspan(
-            std::span<char const>(static_cast<char const *>(buffer), len));
-    }
-
-    std::size_t trywrite(void const *buffer, std::size_t len) {
-        return trywrite(
-            std::span<char const>(static_cast<char const *>(buffer), len));
-    }
-
-    void timeout(std::chrono::steady_clock::duration timeout) {
-        mRaw->raw_timeout(timeout);
-    }
-
-    Task<Expected<>> seek(std::uint64_t pos) {
-        co_await co_await mRaw->raw_seek(pos);
-        mInIndex = 0;
-        mInEnd = 0;
-        mOutIndex = 0;
-        co_return {};
-    }
-
-private:
-    BytesBuffer mInBuffer;
-    std::size_t mInIndex = 0;
-    std::size_t mInEnd = 0;
-    BytesBuffer mOutBuffer;
-    std::size_t mOutIndex = 0;
-    Stream *mRaw;
-};
-
-struct OwningStream : BorrowedStream {
-    explicit OwningStream() : BorrowedStream(), mRawUnique() {}
-
-    explicit OwningStream(std::unique_ptr<Stream> raw)
-        : BorrowedStream(raw.get()),
-          mRawUnique(std::move(raw)) {}
-
-    std::unique_ptr<Stream> releaseraw() noexcept {
-        return std::move(mRawUnique);
-    }
-
-private:
-    std::unique_ptr<Stream> mRawUnique;
-};
-
-template <std::derived_from<Stream> Stream, class... Args>
-OwningStream make_stream(Args &&...args) {
-    return OwningStream(std::make_unique<Stream>(std::forward<Args>(args)...));
-}
-} // namespace co_async
-
-
-
-
-
-
-
-
-namespace co_async {
-Task<Expected<OwningStream>> file_open(std::filesystem::path path,
-                                       OpenMode mode);
-OwningStream file_from_handle(FileHandle handle);
-Task<Expected<String>> file_read(std::filesystem::path path);
-Task<Expected<>> file_write(std::filesystem::path path,
-                            std::string_view content);
-Task<Expected<>> file_append(std::filesystem::path path,
-                             std::string_view content);
-} // namespace co_async
-
-
-#ifdef __linux__
-# include <unistd.h>
-#endif
-
-
-#ifdef __linux__
-
-
-
-
-
-namespace co_async {
-struct FSPipeHandlePair {
-    FileHandle mReader;
-    FileHandle mWriter;
-
-    std::array<OwningStream, 2> stream() {
-        return {file_from_handle(reader()), file_from_handle(writer())};
-    }
-
-    FileHandle reader() {
-# if CO_ASYNC_DEBUG
-        if (!mReader) [[unlikely]] {
-            throw std::logic_error(
-                "PipeHandlePair::reader() can only be called once");
-        }
-# endif
-        return std::move(mReader);
-    }
-
-    FileHandle writer() {
-# if CO_ASYNC_DEBUG
-        if (!mWriter) [[unlikely]] {
-            throw std::logic_error(
-                "PipeHandlePair::writer() can only be called once");
-        }
-# endif
-        return std::move(mWriter);
-    }
-};
-
-inline Task<Expected<FSPipeHandlePair>> fs_pipe() {
-    int p[2];
-    int res = pipe2(p, 0);
-    if (res < 0) [[unlikely]] {
-        res = -errno;
-    }
-    co_await expectError(res);
-    co_return FSPipeHandlePair{FileHandle(p[0]), FileHandle(p[1])};
-}
-
-inline Task<Expected<>> send_file(FileHandle &sock, FileHandle &&file) {
-    auto [readPipe, writePipe] = co_await co_await fs_pipe();
-    while (auto n = co_await co_await fs_splice(file, writePipe, 65536)) {
-        std::size_t m;
-        while ((m = co_await co_await fs_splice(readPipe, sock, n)) < n)
-            [[unlikely]] {
-            n -= m;
-        }
-    }
-    co_await co_await fs_close(std::move(file));
-    co_await co_await fs_close(std::move(readPipe));
-    co_await co_await fs_close(std::move(writePipe));
-    co_return {};
-}
-
-inline Task<Expected<>> recv_file(FileHandle &sock, FileHandle &&file) {
-    auto [readPipe, writePipe] = co_await co_await fs_pipe();
-    while (auto n = co_await co_await fs_splice(sock, writePipe, 65536)) {
-        std::size_t m;
-        while ((m = co_await co_await fs_splice(readPipe, file, n)) < n)
-            [[unlikely]] {
-            n -= m;
-        }
-    }
-    co_await co_await fs_close(std::move(file));
-    co_await co_await fs_close(std::move(readPipe));
-    co_await co_await fs_close(std::move(writePipe));
-    co_return {};
-}
-} // namespace co_async
-#endif
-
-
-
-
-
-
-
-
-
-
-
-#include <signal.h>
-#include <spawn.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h>
-
-namespace co_async {
-using Pid = pid_t;
-
-struct WaitProcessResult {
-    Pid pid;
-    int status;
-
-    enum ExitType : int {
-        Continued = CLD_CONTINUED,
-        Stopped = CLD_STOPPED,
-        Trapped = CLD_TRAPPED,
-        Dumped = CLD_DUMPED,
-        Killed = CLD_KILLED,
-        Exited = CLD_EXITED,
-        Timeout = -1,
-    } exitType;
-};
-
-inline Task<Expected<>> kill_process(Pid pid, int sig = SIGKILL) {
-    co_await expectError(kill(pid, sig));
-    co_return {};
-}
-
-inline Task<Expected<WaitProcessResult>> wait_process(Pid pid,
-                                                      int options = WEXITED) {
-    siginfo_t info{};
-    co_await expectError(co_await UringOp().prep_waitid(
-        P_PID, static_cast<id_t>(pid), &info, options, 0));
-    co_return WaitProcessResult{
-        .pid = info.si_pid,
-        .status = info.si_status,
-        .exitType = static_cast<WaitProcessResult::ExitType>(info.si_code),
-    };
-}
-
-inline Task<Expected<WaitProcessResult>>
-wait_process(Pid pid, std::chrono::steady_clock::duration timeout,
-             int options = WEXITED) {
-    siginfo_t info{};
-    auto ts = durationToKernelTimespec(timeout);
-    auto ret = expectError(co_await UringOp::link_ops(
-        UringOp().prep_waitid(P_PID, static_cast<id_t>(pid), &info, options, 0),
-        UringOp().prep_link_timeout(&ts, IORING_TIMEOUT_BOOTTIME)));
-    if (ret == std::make_error_code(std::errc::operation_canceled)) {
-        co_return std::errc::stream_timeout;
-    }
-    co_await std::move(ret);
-    co_return WaitProcessResult{
-        .pid = info.si_pid,
-        .status = info.si_status,
-        .exitType = static_cast<WaitProcessResult::ExitType>(info.si_code),
-    };
-}
-
-struct ProcessBuilder {
-    ProcessBuilder() {
-        mAbsolutePath = false;
-        mEnvInherited = false;
-        throwingErrorErrno(posix_spawnattr_init(&mAttr));
-        throwingErrorErrno(posix_spawn_file_actions_init(&mFileActions));
-    }
-
-    ProcessBuilder(ProcessBuilder &&) = delete;
-
-    ~ProcessBuilder() {
-        posix_spawnattr_destroy(&mAttr);
-        posix_spawn_file_actions_destroy(&mFileActions);
-    }
-
-    ProcessBuilder &chdir(std::filesystem::path path) {
-        throwingErrorErrno(
-            posix_spawn_file_actions_addchdir_np(&mFileActions, path.c_str()));
-        return *this;
-    }
-
-    ProcessBuilder &open(int fd, FileHandle &&file) {
-        open(fd, file.fileNo());
-        mFileStore.push_back(std::move(file));
-        return *this;
-    }
-
-    ProcessBuilder &open(int fd, FileHandle const &file) {
-        return open(fd, file.fileNo());
-    }
-
-    ProcessBuilder &open(int fd, int ourFd) {
-        if (fd != ourFd) {
-            throwingErrorErrno(
-                posix_spawn_file_actions_adddup2(&mFileActions, ourFd, fd));
-        }
-        return *this;
-    }
-
-    ProcessBuilder &pipe_out(int fd, OwningStream &stream) {
-        int p[2];
-        throwingErrorErrno(pipe2(p, 0));
-        open(fd, FileHandle(p[1]));
-        stream = file_from_handle(FileHandle(p[0]));
-        close(p[0]);
-        close(p[1]);
-        return *this;
-    }
-
-    ProcessBuilder &pipe_in(int fd, OwningStream &stream) {
-        int p[2];
-        throwingErrorErrno(pipe2(p, 0));
-        open(fd, FileHandle(p[0]));
-        stream = file_from_handle(FileHandle(p[1]));
-        close(p[0]);
-        close(p[1]);
-        return *this;
-    }
-
-    ProcessBuilder &close(int fd) {
-        throwingErrorErrno(
-            posix_spawn_file_actions_addclose(&mFileActions, fd));
-        return *this;
-    }
-
-    ProcessBuilder &path(std::filesystem::path path, bool isAbsolute = false) {
-        mPath = path.string();
-        mAbsolutePath = isAbsolute;
-        return *this;
-    }
-
-    ProcessBuilder &arg(std::string_view arg) {
-        mArgvStore.emplace_back(arg);
-        return *this;
-    }
-
-    ProcessBuilder &inherit_env(bool inherit = true) {
-        if (inherit) {
-            for (char *const *e = environ; *e; ++e) {
-                mEnvpStore.emplace_back(*e);
-            }
-        }
-        mEnvInherited = true;
-        return *this;
-    }
-
-    ProcessBuilder &env(std::string_view key, std::string_view val) {
-        if (!mEnvInherited) {
-            inherit_env();
-        }
-        std::string env(key);
-        env.push_back('=');
-        env.append(val);
-        mEnvpStore.emplace_back(std::move(env));
-        return *this;
-    }
-
-    Task<Expected<Pid>> spawn() {
-        Pid pid;
-        std::vector<char *> argv;
-        std::vector<char *> envp;
-        if (!mArgvStore.empty()) {
-            argv.reserve(mArgvStore.size() + 2);
-            argv.push_back(mPath.data());
-            for (auto &s: mArgvStore) {
-                argv.push_back(s.data());
-            }
-            argv.push_back(nullptr);
-        } else {
-            argv = {mPath.data(), nullptr};
-        }
-        if (!mEnvpStore.empty()) {
-            envp.reserve(mEnvpStore.size() + 1);
-            for (auto &s: mEnvpStore) {
-                envp.push_back(s.data());
-            }
-            envp.push_back(nullptr);
-        }
-        int status = (mAbsolutePath ? posix_spawn : posix_spawnp)(
-            &pid, mPath.c_str(), &mFileActions, &mAttr, argv.data(),
-            mEnvpStore.empty() ? environ : envp.data());
-        if (status != 0) [[unlikely]] {
-            co_return std::errc(errno);
-        }
-        mPath.clear();
-        mArgvStore.clear();
-        mEnvpStore.clear();
-        mFileStore.clear();
-        co_return pid;
-    }
-
-private:
-    posix_spawn_file_actions_t mFileActions;
-    posix_spawnattr_t mAttr;
-    bool mAbsolutePath;
-    bool mEnvInherited;
-    std::string mPath;
-    std::vector<std::string> mArgvStore;
-    std::vector<std::string> mEnvpStore;
-    std::vector<FileHandle> mFileStore;
-};
-} // namespace co_async
-
-
-
-
-
-
-
-
-
-#include <fcntl.h>
-#include <sys/inotify.h>
-#include <unistd.h>
-
-namespace co_async {
-struct FileWatch {
-    enum FileEvent : std::uint32_t {
-        OnAccessed = IN_ACCESS,
-        OnOpened = IN_OPEN,
-        OnAttributeChanged = IN_ATTRIB,
-        OnModified = IN_MODIFY,
-        OnDeleted = IN_DELETE_SELF,
-        OnMoved = IN_MOVE_SELF,
-        OnChildCreated = IN_CREATE,
-        OnChildDeleted = IN_DELETE,
-        OnChildMovedAway = IN_MOVED_FROM,
-        OnChildMovedInto = IN_MOVED_TO,
-        OnWriteFinished = IN_CLOSE_WRITE,
-        OnReadFinished = IN_CLOSE_NOWRITE,
-    };
-
-    FileWatch()
-        : mFile(throwingErrorErrno(inotify_init1(0))),
-          mStream(file_from_handle(FileHandle(mFile))) {}
-
-    int add(std::filesystem::path const &path, FileEvent event) {
-        int wd =
-            throwingErrorErrno(inotify_add_watch(mFile, path.c_str(), event));
-        mWatches.emplace(wd, path);
-        return wd;
-    }
-
-    FileWatch &watch(std::filesystem::path const &path, FileEvent event,
-                     bool recursive = false) {
-        add(path, event);
-        if (recursive && std::filesystem::is_directory(path)) {
-            for (auto const &entry:
-                 std::filesystem::recursive_directory_iterator(path)) {
-                add(entry.path(), event);
-            }
-        }
-        return *this;
-    }
-
-    FileWatch &remove(int wd) {
-        throwingErrorErrno(inotify_rm_watch(mFile, wd));
-        mWatches.erase(wd);
-        return *this;
-    }
-
-    struct WaitFileResult {
-        std::filesystem::path path;
-        FileEvent event;
-    };
-
-    Task<Expected<WaitFileResult>> wait() {
-        if (!co_await mStream.getstruct(*mEventBuffer)) [[unlikely]] {
-            throw std::runtime_error("EOF while reading struct");
-        }
-        String name;
-        name.reserve(mEventBuffer->len);
-        co_await co_await mStream.getn(name, mEventBuffer->len);
-        name = name.c_str();
-        auto path = mWatches.at(mEventBuffer->wd);
-        if (!name.empty()) {
-            path /= make_path(name);
-        }
-        co_return WaitFileResult{
-            .path = std::move(path),
-            .event = static_cast<FileEvent>(mEventBuffer->mask),
-        };
-    }
-
-private:
-    int mFile;
-    OwningStream mStream;
-    std::unique_ptr<struct inotify_event> mEventBuffer =
-        std::make_unique<struct inotify_event>();
-    std::map<int, std::filesystem::path> mWatches;
-};
-} // namespace co_async
-
-// 
-// 
-// 
-// 
-// 
-// #include <signal.h>
-// #include <sys/types.h>
-// #include <sys/wait.h>
-// #include <unistd.h>
-//
-// namespace co_async {
-// struct SignalingContextMT {
-//     static void startMain(std::stop_token stop) {
-//         while (!stop.stop_requested()) [[likely]] {
-//             sigset_t s;
-//             sigemptyset(&s);
-//             std::unique_lock lock(instance->mMutex);
-//             for (auto [signo, waiters]: instance->mWaitingSignals) {
-//                 sigaddset(&s, signo);
-//             }
-//             lock.unlock();
-//             int signo;
-//             throwingError(-sigwait(&s, &signo));
-//             lock.lock();
-//             std::deque<std::coroutine_handle<>> waiters;
-//             waiters.swap(instance->mWaitingSignals.at(signo));
-//             lock.unlock();
-//             for (auto coroutine: waiters) {
-//                 IOContextMT::spawn(coroutine);
-//             }
-//         }
-//     }
-//
-//     struct SignalAwaiter {
-//         bool await_ready() const noexcept {
-//             return false;
-//         }
-//
-//         void await_suspend(std::coroutine_handle<> coroutine) const {
-//             std::lock_guard lock(instance->mMutex);
-//             instance->mWaitingSignals[mSigno].push_back(coroutine);
-//         }
-//
-//         void await_resume() const noexcept {}
-//
-//         int mSigno;
-//     };
-//
-//     static SignalAwaiter waitSignal(int signo) {
-//         return SignalAwaiter(signo);
-//     }
-//
-//     static void start() {
-//         instance->mWorker =
-//             std::jthread([](std::stop_token stop) { startMain(stop); });
-//     }
-//
-//     static inline SignalingContextMT *instance;
-//
-//     SignalingContextMT() {
-//         if (instance) {
-//             throw std::logic_error(
-//                 "each process may contain only one SignalingContextMT");
-//         }
-//         instance = this;
-//         start();
-//     }
-//
-//     SignalingContextMT(SignalingContextMT &&) = delete;
-//
-//     ~SignalingContextMT() {
-//         instance = nullptr;
-//     }
-//
-// private:
-//     std::map<int, std::deque<std::coroutine_handle<>>> mWaitingSignals;
-//     std::mutex mMutex;
-//     std::jthread mWorker;
-// };
-// } // namespace co_async
-
-
-
-#include <arpa/inet.h>
-
-
-
-
-
-
-
-#include <netdb.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <sys/un.h>
-#include <unistd.h>
-
-namespace co_async {
-std::error_category const &getAddrInfoCategory();
-
-// struct IpAddress {
-//     explicit IpAddress(struct in_addr const &addr) noexcept : mAddr(addr) {}
-//
-//     explicit IpAddress(struct in6_addr const &addr6) noexcept : mAddr(addr6)
-//     {}
-//
-//     static Expected<IpAddress> fromString(char const *host);
-//
-//     String toString() const;
-//
-//     auto repr() const {
-//         return toString();
-//     }
-//
-//     std::variant<struct in_addr, struct in6_addr> mAddr;
-// };
-
-struct SocketAddress {
-    SocketAddress() = default;
-
-    explicit SocketAddress(struct sockaddr const *addr, socklen_t addrLen,
-                           sa_family_t family, int sockType, int protocol);
-
-    struct sockaddr_storage mAddr;
-    socklen_t mAddrLen;
-    int mSockType;
-    int mProtocol;
-
-    sa_family_t family() const noexcept {
-        return mAddr.ss_family;
-    }
-
-    int socktype() const noexcept {
-        return mSockType;
-    }
-
-    int protocol() const noexcept {
-        return mProtocol;
-    }
-
-    std::string host() const;
-
-    int port() const;
-
-    void trySetPort(int port);
-
-    String toString() const;
-
-    auto repr() const {
-        return toString();
-    }
-
-private:
-    void initFromHostPort(struct in_addr const &host, int port);
-    void initFromHostPort(struct in6_addr const &host, int port);
-};
-
-struct AddressResolver {
-private:
-    std::string m_host;
-    int m_port = -1;
-    std::string m_service;
-    struct addrinfo m_hints = {};
-
-public:
-    AddressResolver &host(std::string_view host) {
-        if (auto i = host.find("://"); i != host.npos) {
-            if (auto service = host.substr(0, i); !service.empty()) {
-                m_service = service;
-            }
-            host.remove_prefix(i + 3);
-        }
-        if (auto i = host.rfind(':'); i != host.npos) {
-            if (auto portOpt = from_string<int>(host.substr(i + 1)))
-                [[likely]] {
-                m_port = *portOpt;
-                host.remove_suffix(host.size() - i);
-            }
-        }
-        m_host = host;
-        return *this;
-    }
-
-    AddressResolver &port(int port) {
-        m_port = port;
-        return *this;
-    }
-
-    AddressResolver &service(std::string_view service) {
-        m_service = service;
-        return *this;
-    }
-
-    AddressResolver &family(int family) {
-        m_hints.ai_family = family;
-        return *this;
-    }
-
-    AddressResolver &socktype(int socktype) {
-        m_hints.ai_socktype = socktype;
-        return *this;
-    }
-
-    struct ResolveResult {
-        std::vector<SocketAddress> addrs;
-        std::string service;
-    };
-
-    Expected<ResolveResult> resolve_all();
-    Expected<SocketAddress> resolve_one();
-    Expected<SocketAddress> resolve_one(std::string &service);
-};
-
-struct [[nodiscard]] SocketHandle : FileHandle {
-    using FileHandle::FileHandle;
-};
-
-struct [[nodiscard]] SocketListener : SocketHandle {
-    using SocketHandle::SocketHandle;
-};
-
-SocketAddress get_socket_address(SocketHandle &sock);
-SocketAddress get_socket_peer_address(SocketHandle &sock);
-
-template <class T>
-Expected<T> socketGetOption(SocketHandle &sock, int level, int optId) {
-    T val;
-    socklen_t len = sizeof(val);
-    if (auto e =
-            expectError(getsockopt(sock.fileNo(), level, optId, &val, &len))) {
-        return e.error();
-    }
-    return val;
-}
-
-template <class T>
-Expected<> socketSetOption(SocketHandle &sock, int level, int opt,
-                           T const &optVal) {
-    return expectError(
-        setsockopt(sock.fileNo(), level, opt, &optVal, sizeof(optVal)));
-}
-
-Task<Expected<SocketHandle>> createSocket(int family, int type, int protocol);
-Task<Expected<SocketHandle>> socket_connect(SocketAddress const &addr);
-Task<Expected<SocketHandle>>
-socket_connect(SocketAddress const &addr,
-               std::chrono::steady_clock::duration timeout);
-
-Task<Expected<SocketHandle>> socket_connect(SocketAddress const &addr,
-                                            CancelToken cancel);
-Task<Expected<SocketListener>> listener_bind(SocketAddress const &addr,
-                                             int backlog = SOMAXCONN);
-Task<Expected<SocketHandle>> listener_accept(SocketListener &listener);
-Task<Expected<SocketHandle>> listener_accept(SocketListener &listener,
-                                             CancelToken cancel);
-Task<Expected<SocketHandle>> listener_accept(SocketListener &listener,
-                                             SocketAddress &peerAddr);
-Task<Expected<SocketHandle>> listener_accept(SocketListener &listener,
-                                             SocketAddress &peerAddr,
-                                             CancelToken cancel);
-Task<Expected<std::size_t>> socket_write(SocketHandle &sock,
-                                         std::span<char const> buf);
-Task<Expected<std::size_t>> socket_write_zc(SocketHandle &sock,
-                                            std::span<char const> buf);
-Task<Expected<std::size_t>> socket_read(SocketHandle &sock,
-                                        std::span<char> buf);
-Task<Expected<std::size_t>>
-socket_write(SocketHandle &sock, std::span<char const> buf, CancelToken cancel);
-Task<Expected<std::size_t>> socket_write_zc(SocketHandle &sock,
-                                            std::span<char const> buf,
-                                            CancelToken cancel);
-Task<Expected<std::size_t>> socket_read(SocketHandle &sock, std::span<char> buf,
-                                        CancelToken cancel);
-Task<Expected<std::size_t>>
-socket_write(SocketHandle &sock, std::span<char const> buf,
-             std::chrono::steady_clock::duration timeout);
-Task<Expected<std::size_t>>
-socket_read(SocketHandle &sock, std::span<char> buf,
-            std::chrono::steady_clock::duration timeout);
-Task<Expected<std::size_t>>
-socket_write(SocketHandle &sock, std::span<char const> buf,
-             std::chrono::steady_clock::duration timeout, CancelToken cancel);
-Task<Expected<std::size_t>>
-socket_read(SocketHandle &sock, std::span<char> buf,
-            std::chrono::steady_clock::duration timeout, CancelToken cancel);
-Task<Expected<>> socket_shutdown(SocketHandle &sock, int how = SHUT_RDWR);
-} // namespace co_async
-
-
-
-
-
-
-
-namespace co_async {
-Task<Expected<>> zlib_inflate(BorrowedStream &source, BorrowedStream &dest);
-Task<Expected<>> zlib_deflate(BorrowedStream &source, BorrowedStream &dest);
-} // namespace co_async
-
-
-
-
-
-
-
-
-namespace co_async {
-std::error_category const &bearSSLCategory();
-
-StructPImpl(SSLClientTrustAnchor) {
-    Expected<> add(std::string_view content);
-};
-
-StructPImpl(SSLServerPrivateKey){};
-
-StructPImpl(SSLServerCertificate) {
-    Expected<> add(std::string_view content);
-};
-
-StructPImpl(SSLServerSessionCache){};
-Task<Expected<OwningStream>>
-ssl_connect(char const *host, int port, SSLClientTrustAnchor const &ta,
-            std::span<char const *const> protocols, std::string_view proxy,
-            std::chrono::steady_clock::duration timeout);
-OwningStream ssl_accept(SocketHandle file, SSLServerCertificate const &cert,
-                        SSLServerPrivateKey const &pkey,
-                        std::span<char const *const> protocols,
-                        SSLServerSessionCache *cache = nullptr);
-} // namespace co_async
-
-
-
-
-
-
-namespace co_async {
-struct CachedStream : Stream {
-    explicit CachedStream(BorrowedStream &stream) : mStream(stream) {}
-
-    BorrowedStream &base() const noexcept {
-        return mStream;
-    }
-
-    Task<Expected<std::size_t>> raw_read(std::span<char> buffer) override {
-        if (mPos != mCache.size()) {
-            auto n = std::min(mCache.size() - mPos, buffer.size());
-            std::memcpy(buffer.data(), mCache.data() + mPos, n);
-            mPos += n;
-            co_return n;
-        }
-        auto n = co_await co_await mStream.read(buffer);
-        mCache.append(buffer.data(), n);
-        co_return n;
-    }
-
-    void raw_timeout(std::chrono::steady_clock::duration timeout) override {
-        mStream.timeout(timeout);
-    }
-
-    Task<> raw_close() override {
-        return mStream.close();
-    }
-
-    Task<Expected<>> raw_flush() override {
-        return mStream.flush();
-    }
-
-    Task<Expected<>> raw_seek(std::uint64_t pos) override {
-        if (pos <= mCache.size()) {
-            mPos = pos;
-            co_return {};
-        } else {
-            co_return std::errc::invalid_seek;
-        }
-    }
-
-private:
-    BorrowedStream &mStream;
-    std::string mCache;
-    std::size_t mPos = 0;
-};
-} // namespace co_async
-
-
-
-
-
-
-
-
-namespace co_async {
-struct IStringStream : Stream {
-    IStringStream() noexcept : mPosition(0) {}
-
-    IStringStream(std::string_view strView)
-        : mStringView(strView),
-          mPosition(0) {}
-
-    Task<Expected<std::size_t>> raw_read(std::span<char> buffer) override {
-        std::size_t size =
-            std::min(buffer.size(), mStringView.size() - mPosition);
-        std::copy_n(mStringView.begin() + mPosition, size, buffer.begin());
-        mPosition += size;
-        co_return size;
-    }
-
-    std::string_view str() const noexcept {
-        return mStringView;
-    }
-
-    std::string_view unread_str() const noexcept {
-        return mStringView.substr(mPosition);
-    }
-
-private:
-    std::string_view mStringView;
-    std::size_t mPosition;
-};
-
-struct OStringStream : Stream {
-    OStringStream(String &output) noexcept : mOutput(output) {}
-
-    Task<Expected<std::size_t>>
-    raw_write(std::span<char const> buffer) override {
-        mOutput.append(buffer.data(), buffer.size());
-        co_return buffer.size();
-    }
-
-    String &str() const noexcept {
-        return mOutput;
-    }
-
-    String release() noexcept {
-        return std::move(mOutput);
-    }
-
-private:
-    String &mOutput;
-};
-} // namespace co_async
-
-
-
-
-
-
-namespace co_async {
-
-std::array<OwningStream, 2> pipe_stream();
-Task<Expected<>> pipe_forward(BorrowedStream &in, BorrowedStream &out);
-
-template <class Func, class... Args>
-    requires std::invocable<Func, Args..., OwningStream &>
-inline Task<Expected<>> pipe_bind(OwningStream w, Func &&func, Args &&...args) {
-    return co_bind(
-        [func = std::forward<decltype(func)>(func),
-         w = std::move(w)](auto &&...args) mutable -> Task<Expected<>> {
-            auto e1 =
-                co_await std::invoke(std::forward<decltype(func)>(func),
-                                     std::forward<decltype(args)>(args)..., w);
-            auto e2 = co_await w.flush();
-            co_await w.close();
-            co_await e1;
-            co_await e2;
-            co_return {};
-        },
-        std::forward<decltype(args)>(args)...);
-}
-} // namespace co_async
-
-
-
-
-
-namespace co_async {
-OwningStream &stdio();
-OwningStream &raw_stdio();
-} // namespace co_async
-
-
-
-
-
-
-
-#include <dirent.h>
-
-namespace co_async {
-struct DirectoryWalker {
-    explicit DirectoryWalker(FileHandle file);
-    DirectoryWalker(DirectoryWalker &&) = default;
-    DirectoryWalker &operator=(DirectoryWalker &&) = default;
-    ~DirectoryWalker();
-    Task<Expected<String>> next();
-
-private:
-    OwningStream mStream;
-};
-
-Task<Expected<DirectoryWalker>> dir_open(std::filesystem::path path);
-} // namespace co_async
-
-
-
-
-
-
-
-namespace co_async {
-Task<Expected<SocketHandle>>
-socket_proxy_connect(char const *host, int port, std::string_view proxy,
-                     std::chrono::steady_clock::duration timeout);
-} // namespace co_async
-
-
-
-
-
-
-
-
-
-namespace co_async {
-struct SocketStream : Stream {
-    Task<Expected<std::size_t>> raw_read(std::span<char> buffer) override {
-        auto ret =
-            co_await socket_read(mFile, buffer, mTimeout, co_await co_cancel);
-        if (ret == std::make_error_code(std::errc::operation_canceled))
-            [[unlikely]] {
-            co_return std::errc::stream_timeout;
-        }
-        co_return ret;
-    }
-
-    Task<Expected<std::size_t>>
-    raw_write(std::span<char const> buffer) override {
-        auto ret =
-            co_await socket_write(mFile, buffer, mTimeout, co_await co_cancel);
-        if (ret == std::make_error_code(std::errc::operation_canceled))
-            [[unlikely]] {
-            co_return std::errc::stream_timeout;
-        }
-        co_return ret;
-    }
-
-    SocketHandle release() noexcept {
-        return std::move(mFile);
-    }
-
-    SocketHandle &get() noexcept {
-        return mFile;
-    }
-
-    explicit SocketStream(SocketHandle file) : mFile(std::move(file)) {}
-
-    void raw_timeout(std::chrono::steady_clock::duration timeout) override {
-        mTimeout = timeout;
-    }
-
-private:
-    SocketHandle mFile;
-    std::chrono::steady_clock::duration mTimeout = std::chrono::seconds(30);
-};
-
-inline Task<Expected<OwningStream>>
-tcp_connect(char const *host, int port, std::string_view proxy,
-            std::chrono::steady_clock::duration timeout) {
-    auto handle =
-        co_await co_await socket_proxy_connect(host, port, proxy, timeout);
-    OwningStream sock = make_stream<SocketStream>(std::move(handle));
-    sock.timeout(timeout);
-    co_return sock;
-}
-
-inline Task<Expected<OwningStream>> tcp_accept(SocketListener &listener) {
-    auto handle = co_await co_await listener_accept(listener);
-    OwningStream sock = make_stream<SocketStream>(std::move(handle));
-    co_return sock;
-}
-} // namespace co_async
-
-
-
-
-
-
-namespace co_async {
-struct URIParams : SimpleMap<String, String> {
-    using SimpleMap<String, String>::SimpleMap;
-};
-
-struct URI {
-    String path;
-    URIParams params;
-
-public:
-    static void url_decode(String &r, std::string_view s);
-    static String url_decode(std::string_view s);
-    static void url_encode(String &r, std::string_view s);
-    static String url_encode(std::string_view s);
-    static void url_encode_path(String &r, std::string_view s);
-    static String url_encode_path(std::string_view s);
-    static URI parse(std::string_view uri);
-    void dump(String &r) const;
-    String dump() const;
-
-    String repr() const {
-        return dump();
-    }
-};
-} // namespace co_async
-
-
-
-
-
-
-namespace co_async {
-String timePointToHTTPDate(std::chrono::system_clock::time_point tp);
-Expected<std::chrono::system_clock::time_point>
-httpDateToTimePoint(String const &date);
-String httpDateNow();
-std::string_view getHTTPStatusName(int status);
-String guessContentTypeByExtension(
-    std::string_view ext, char const *defaultType = "text/plain;charset=utf-8");
-String capitalizeHTTPHeader(std::string_view key);
-} // namespace co_async
-
-
-
-
-
-
-
-
-
-
-namespace co_async {
-struct HTTPHeaders : SimpleMap<String, String> {
-    using SimpleMap<String, String>::SimpleMap;
-    // NOTE: user-specified http headers must not contain the following keys:
-    // - connection
-    // - acecpt-encoding
-    // - transfer-encoding
-    // - content-encoding
-    // - content-length
-    // they should only be used internally in our http protocol implementation
-};
-enum class HTTPContentEncoding {
-    Identity = 0,
-    Gzip,
-    Deflate,
-};
-
-struct HTTPRequest {
-    String method{"GET", 3};
-    URI uri{String{"/", 1}, {}};
-    HTTPHeaders headers{};
-
-    auto repr() const {
-        return std::make_tuple(method, uri, headers);
-    }
-};
-
-struct HTTPResponse {
-    int status{0};
-    HTTPHeaders headers{};
-
-    auto repr() const {
-        return std::make_tuple(status, headers);
-    }
-};
-
-struct HTTPProtocol {
-public:
-    OwningStream sock;
-
-    explicit HTTPProtocol(OwningStream sock) : sock(std::move(sock)) {}
-
-    HTTPProtocol(HTTPProtocol &&) = delete;
-    virtual ~HTTPProtocol() = default;
-    virtual void initServerState() = 0;
-    virtual void initClientState() = 0;
-    virtual Task<Expected<>> writeBodyStream(BorrowedStream &body) = 0;
-    virtual Task<Expected<>> readBodyStream(BorrowedStream &body) = 0;
-    virtual Task<Expected<>> writeBody(std::string_view body) = 0;
-    virtual Task<Expected<>> readBody(String &body) = 0;
-    virtual Task<Expected<>> writeRequest(HTTPRequest const &req) = 0;
-    virtual Task<Expected<>> readRequest(HTTPRequest &req) = 0;
-    virtual Task<Expected<>> writeResponse(HTTPResponse const &res) = 0;
-    virtual Task<Expected<>> readResponse(HTTPResponse &res) = 0;
-};
-
-struct HTTPProtocolVersion11 : HTTPProtocol {
-    using HTTPProtocol::HTTPProtocol;
-
-protected:
-    HTTPContentEncoding mContentEncoding;
-    String mAcceptEncoding;
-    std::optional<std::size_t> mContentLength;
-    HTTPContentEncoding httpContentEncodingByName(std::string_view name);
-    Task<Expected<>> parseHeaders(HTTPHeaders &headers);
-    Task<Expected<>> dumpHeaders(HTTPHeaders const &headers);
-    void handleContentEncoding(HTTPHeaders &headers);
-    void handleAcceptEncoding(HTTPHeaders &headers);
-    void
-    negotiateAcceptEncoding(HTTPHeaders &headers,
-                            std::span<HTTPContentEncoding const> encodings);
-    Task<Expected<>> writeChunked(BorrowedStream &body);
-    Task<Expected<>> writeChunkedString(std::string_view body);
-    Task<Expected<>> readChunked(BorrowedStream &body);
-    Task<Expected<>> readChunkedString(String &body);
-    Task<Expected<>> writeEncoded(BorrowedStream &body);
-    Task<Expected<>> writeEncodedString(std::string_view body);
-    Task<Expected<>> readEncoded(BorrowedStream &body);
-    Task<Expected<>> readEncodedString(String &body);
-#if CO_ASYNC_DEBUG
-    void checkPhase(int from, int to);
-
-private:
-    int mPhase = 0;
-#else
-    void checkPhase(int from, int to);
-#endif
-public:
-    Task<Expected<>> writeBodyStream(BorrowedStream &body) override;
-    Task<Expected<>> writeBody(std::string_view body) override;
-    Task<Expected<>> readBodyStream(BorrowedStream &body) override;
-    Task<Expected<>> readBody(String &body) override;
-    Task<Expected<>> writeRequest(HTTPRequest const &req) override;
-    void initServerState() override;
-    void initClientState() override;
-    Task<Expected<>> readRequest(HTTPRequest &req) override;
-    Task<Expected<>> writeResponse(HTTPResponse const &res) override;
-    Task<Expected<>> readResponse(HTTPResponse &res) override;
-    explicit HTTPProtocolVersion11(OwningStream sock);
-    ~HTTPProtocolVersion11() override;
-};
-
-struct HTTPProtocolVersion2 : HTTPProtocolVersion11 {
-    using HTTPProtocolVersion11::HTTPProtocolVersion11;
-};
-} // namespace co_async
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-namespace co_async {
-enum class HTTPRouteMode {
-    SuffixAny = 0, // "/a-9\\*g./.."
-    SuffixName,    // "/a"
-    SuffixPath,    // "/a/b/c"
-};
-
-struct SSLServerState {
-    PImpl<SSLServerCertificate> cert;
-    PImpl<SSLServerPrivateKey> skey;
-    PImpl<SSLServerSessionCache> cache;
-};
-
-struct HTTPServer {
-    struct IO {
-        explicit IO(HTTPProtocol *http) noexcept : mHttp(http) {}
-
-        HTTPRequest request;
-        Task<Expected<bool>> readRequestHeader();
-        Task<Expected<String>> request_body();
-        Task<Expected<>> request_body_stream(OwningStream &out);
-        Task<Expected<>> response(HTTPResponse resp, std::string_view content);
-        Task<Expected<>> response(HTTPResponse resp, OwningStream &body);
-
-        BorrowedStream &extractSocket() const noexcept {
-            return mHttp->sock;
-        }
-
-    private:
-        HTTPProtocol *mHttp;
-        bool mBodyRead = false;
-#if CO_ASYNC_DEBUG
-        HTTPResponse mResponseSavedForDebug{};
-        friend HTTPServer;
-#endif
-        void builtinHeaders(HTTPResponse &res);
-    };
-
-    using HTTPHandler = std::function<Task<Expected<>>(IO &)>;
-    using HTTPPrefixHandler =
-        std::function<Task<Expected<>>(IO &, std::string_view)>;
-    /* using HTTPHandler = Task<Expected<>>(*)(IO &); */
-    /* using HTTPPrefixHandler = Task<Expected<>>(*)(IO &, std::string_view); */
-    HTTPServer();
-    ~HTTPServer();
-    HTTPServer(HTTPServer &&) = delete;
-#if CO_ASYNC_DEBUG
-    void enableLogRequests();
-#endif
-    void timeout(std::chrono::steady_clock::duration timeout);
-    void route(std::string_view methods, std::string_view path,
-               HTTPHandler handler);
-    void route(std::string_view methods, std::string_view prefix,
-               HTTPRouteMode mode, HTTPPrefixHandler handler);
-    void route(HTTPHandler handler);
-    Task<std::unique_ptr<HTTPProtocol>>
-    prepareHTTPS(SocketHandle handle, SSLServerState &https) const;
-    Task<std::unique_ptr<HTTPProtocol>> prepareHTTP(SocketHandle handle) const;
-    Task<Expected<>> handle_http(SocketHandle handle) const;
-    Task<Expected<>> handle_http_redirect_to_https(SocketHandle handle) const;
-    Task<Expected<>> handle_https(SocketHandle handle,
-                                  SSLServerState &https) const;
-    Task<Expected<>>
-    doHandleConnection(std::unique_ptr<HTTPProtocol> http) const;
-    static Task<Expected<>> make_error_response(IO &io, int status);
-
-private:
-    struct Impl;
-    std::unique_ptr<Impl> const mImpl;
-};
-} // namespace co_async
-
-
-
-
-
-
-
-namespace co_async {
-struct HTTPServerUtils {
-    static String html_encode(std::string_view str);
-    static Task<Expected<>>
-    make_ok_response(HTTPServer::IO &io, std::string_view body,
-                     String contentType = "text/html;charset=utf-8");
-    static Task<Expected<>>
-    make_response_from_directory(HTTPServer::IO &io,
-                                 std::filesystem::path path);
-    static Task<Expected<>> make_error_response(HTTPServer::IO &io, int status);
-    static Task<Expected<>>
-    make_response_from_file_or_directory(HTTPServer::IO &io,
-                                         std::filesystem::path path);
-    static Task<Expected<>> make_response_from_path(HTTPServer::IO &io,
-                                                    std::filesystem::path path);
-    static Task<Expected<>> make_response_from_file(HTTPServer::IO &io,
-                                                    std::filesystem::path path);
-};
-} // namespace co_async
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-namespace co_async {
-struct HTTPConnection {
-private:
-    struct HTTPProtocolFactory {
-    protected:
-        std::string mHost;
-        int mPort;
-        std::string mHostName;
-        std::string mProxy;
-        std::chrono::steady_clock::duration mTimeout;
-
-    public:
-        HTTPProtocolFactory(std::string host, int port,
-                            std::string_view hostName, std::string proxy,
-                            std::chrono::steady_clock::duration timeout)
-            : mHost(std::move(host)),
-              mPort(port),
-              mHostName(hostName),
-              mProxy(std::move(proxy)),
-              mTimeout(timeout) {}
-
-        virtual Task<Expected<std::unique_ptr<HTTPProtocol>>>
-        createConnection() = 0;
-        virtual ~HTTPProtocolFactory() = default;
-
-        std::string const &hostName() const noexcept {
-            return mHostName;
-        }
-    };
-
-    struct HTTPProtocolFactoryHTTPS : HTTPProtocolFactory {
-        using HTTPProtocolFactory::HTTPProtocolFactory;
-
-        static PImpl<SSLClientTrustAnchor> &trustAnchors() {
-            static PImpl<SSLClientTrustAnchor> instance;
-            return instance;
-        }
-
-        Task<Expected<std::unique_ptr<HTTPProtocol>>>
-        createConnection() override {
-            static CallOnce taInitializeOnce;
-            static char const *const protocols[] = {
-                /* "h2", */
-                "http/1.1",
-            };
-            if (auto locked = co_await taInitializeOnce.call_once()) {
-                auto path = make_path("/etc/ssl/certs/ca-certificates.crt");
-                auto content = co_await co_await file_read(path);
-                co_await trustAnchors().add(content);
-                locked.set_ready();
-            }
-            auto sock = co_await co_await ssl_connect(mHost.c_str(), mPort,
-                                                      trustAnchors(), protocols,
-                                                      mProxy, mTimeout);
-            co_return std::make_unique<HTTPProtocolVersion11>(std::move(sock));
-        }
-    };
-
-    struct HTTPProtocolFactoryHTTP : HTTPProtocolFactory {
-        using HTTPProtocolFactory::HTTPProtocolFactory;
-
-        Task<Expected<std::unique_ptr<HTTPProtocol>>>
-        createConnection() override {
-            auto sock = co_await co_await tcp_connect(mHost.c_str(), mPort,
-                                                      mProxy, mTimeout);
-            co_return std::make_unique<HTTPProtocolVersion11>(std::move(sock));
-        }
-    };
-
-    std::unique_ptr<HTTPProtocol> mHttp;
-    std::unique_ptr<HTTPProtocolFactory> mHttpFactory;
-    friend struct HTTPConnectionPool;
-
-    void terminateLifetime() {
-        mHttp = nullptr;
-        mHttpFactory = nullptr;
-    }
-
-    struct RAIIPointerResetter {
-        std::unique_ptr<HTTPProtocol> *mHttp;
-        RAIIPointerResetter &operator=(RAIIPointerResetter &&) = delete;
-
-        void neverMind() {
-            mHttp = nullptr;
-        }
-
-        ~RAIIPointerResetter() {
-            if (mHttp) [[unlikely]] {
-                *mHttp = nullptr;
-            }
-        }
-    };
-
-    void builtinHeaders(HTTPRequest &req) {
-        using namespace std::string_literals;
-#if CO_ASYNC_DEBUG
-        if (!mHttpFactory) [[unlikely]] {
-            throw std::logic_error("http factory not initialized");
-        }
-#endif
-        req.headers.insert("host"_s, String{mHttpFactory->hostName()});
-        req.headers.insert("user-agent"_s, "co_async/0.0.1"_s);
-        req.headers.insert("accept"_s, "*/*"_s);
-#if CO_ASYNC_ZLIB
-        req.headers.insert("accept-encoding"_s, "deflate, gzip"_s);
-#else
-        req.headers.insert("accept-encoding"_s, "gzip"_s);
-#endif
-    }
-
-    Task<Expected<>> tryWriteRequestAndBody(HTTPRequest const &request,
-                                            std::string_view body) {
-        if (!mHttp)
-            mHttp = co_await co_await mHttpFactory->createConnection();
-        co_await co_await mHttp->writeRequest(request);
-        co_await co_await mHttp->writeBody(body);
-        co_return {};
-#if 0
-        std::error_code ec;
-        for (std::size_t n = 0; n < 3; ++n) {
-            if (!mHttp) {
-                if (auto e = co_await mHttpFactory->createConnection())
-                    [[likely]] {
-                    mHttp = std::move(*e);
-                    mHttp->initClientState();
-                } else {
-                    ec = e.error();
-                    continue;
-                }
-            }
-            if (co_await mHttp->writeRequest(request) &&
-                co_await mHttp->writeBody(body) &&
-                co_await mHttp->sock.peekchar()) [[likely]] {
-                co_return {};
-            }
-            mHttp = nullptr;
-        }
-        co_return ec;
-#endif
-    }
-
-    /* Task<Expected<>> */
-    /* tryWriteRequestAndBodyStream(HTTPRequest const &request, */
-    /*                              BorrowedStream &bodyStream) { */
-    /*     auto cachedStream = make_stream<CachedStream>(bodyStream); */
-    /*     for (std::size_t n = 0; n < 3; ++n) { */
-    /*         if (!mHttp) { */
-    /*             if (auto e = co_await mHttpFactory->createConnection()) */
-    /*                 [[likely]] { */
-    /*                 mHttp = std::move(*e); */
-    /*                 mHttp->initClientState(); */
-    /*             } else { */
-    /*                 continue; */
-    /*             } */
-    /*         } */
-    /*         if (co_await mHttp->writeRequest(request) && */
-    /*             co_await mHttp->writeBodyStream(cachedStream) && */
-    /*             co_await mHttp->sock.peekchar()) [[likely]] { */
-    /*             co_return {}; */
-    /*         } */
-    /*         (void)cachedStream.seek(0); */
-    /*         mHttp = nullptr; */
-    /*     } */
-    /*     co_return std::errc::connection_aborted; */
-    /* } */
-    HTTPConnection(std::unique_ptr<HTTPProtocolFactory> httpFactory)
-        : mHttp(nullptr),
-          mHttpFactory(std::move(httpFactory)) {}
-
-private:
-    static std::tuple<std::string, int>
-    parseHostAndPort(std::string_view hostName, int defaultPort) {
-        int port = defaultPort;
-        auto host = hostName;
-        if (auto i = host.rfind(':'); i != host.npos) {
-            if (auto portOpt = from_string<int>(host.substr(i + 1)))
-                [[likely]] {
-                port = *portOpt;
-                host.remove_suffix(host.size() - i);
-            }
-        }
-        return {std::string(host), port};
-    }
-
-public:
-    BorrowedStream &extractSocket() const noexcept {
-        return mHttp->sock;
-    }
-
-    Expected<> doConnect(std::string_view host,
-                         std::chrono::steady_clock::duration timeout,
-                         bool followProxy) {
-        terminateLifetime();
-        if (host.starts_with("https://")) {
-            host.remove_prefix(8);
-            std::string proxy;
-            if (followProxy) [[likely]] {
-                if (auto p = std::getenv("https_proxy")) {
-                    proxy = p;
-                }
-            }
-            auto [h, p] = parseHostAndPort(host, 443);
-            mHttpFactory = std::make_unique<HTTPProtocolFactoryHTTPS>(
-                std::move(h), p, host, std::move(proxy), timeout);
-            return {};
-        } else if (host.starts_with("http://")) {
-            host.remove_prefix(7);
-            std::string proxy;
-            if (followProxy) {
-                if (auto p = std::getenv("http_proxy")) {
-                    proxy = p;
-                }
-            }
-            auto [h, p] = parseHostAndPort(host, 80);
-            mHttpFactory = std::make_unique<HTTPProtocolFactoryHTTP>(
-                std::move(h), p, host, std::move(proxy), timeout);
-            return {};
-        } else [[unlikely]] {
-            return std::errc::protocol_not_supported;
-        }
-    }
-
-    HTTPConnection() = default;
-
-    Task<Expected<std::tuple<HTTPResponse, String>>>
-    request(HTTPRequest req, std::string_view in = {}) {
-        builtinHeaders(req);
-        RAIIPointerResetter reset(&mHttp);
-        co_await co_await tryWriteRequestAndBody(req, in);
-        HTTPResponse res;
-        String body;
-        co_await co_await mHttp->readResponse(res);
-        co_await co_await mHttp->readBody(body);
-        reset.neverMind();
-        co_return std::tuple{std::move(res), std::move(body)};
-    }
-
-    Task<Expected<std::tuple<HTTPResponse, OwningStream>>>
-    request_streamed(HTTPRequest req, std::string_view in = {}) {
-        builtinHeaders(req);
-        RAIIPointerResetter reset(&mHttp);
-        co_await co_await tryWriteRequestAndBody(req, in);
-        HTTPResponse res;
-        std::string body;
-        co_await co_await mHttp->readResponse(res);
-        auto [r, w] = pipe_stream();
-        co_spawn(pipe_bind(std::move(w),
-                           [this](OwningStream &w) -> Task<Expected<>> {
-                               co_await co_await mHttp->readBodyStream(w);
-                               co_return {};
-                           }));
-        reset.neverMind();
-        co_return std::tuple{res, std::move(r)};
-    }
-};
-
-struct HTTPConnectionPool {
-private:
-    struct alignas(hardware_destructive_interference_size) PoolEntry {
-        HTTPConnection mHttp;
-        std::atomic_bool mInuse{false};
-        bool mValid{false};
-        std::chrono::steady_clock::time_point mLastAccess;
-    };
-
-    struct HostPool {
-        std::vector<PoolEntry> mPool;
-        ConditionVariable mFreeSlot;
-
-        explicit HostPool(std::size_t size) : mPool(size) {}
-    };
-
-    std::shared_mutex mMutex;
-    SimpleMap<std::string, HostPool> mPools;
-    std::chrono::steady_clock::duration mTimeout;
-    std::chrono::steady_clock::duration mKeepAlive;
-    std::chrono::steady_clock::time_point mLastGC;
-    std::size_t mConnPerHost;
-    bool mFollowProxy;
-
-public:
-    struct HTTPConnectionPtr {
-    private:
-        PoolEntry *mEntry;
-        HostPool *mPool;
-
-        explicit HTTPConnectionPtr(PoolEntry *entry, HostPool *pool) noexcept
-            : mEntry(entry),
-              mPool(pool) {}
-
-        friend HTTPConnectionPool;
-
-    public:
-        HTTPConnectionPtr() noexcept : mEntry(nullptr) {}
-
-        HTTPConnectionPtr(HTTPConnectionPtr &&that) noexcept
-            : mEntry(std::exchange(that.mEntry, nullptr)),
-              mPool(std::exchange(that.mPool, nullptr)) {}
-
-        HTTPConnectionPtr &operator=(HTTPConnectionPtr &&that) noexcept {
-            std::swap(mEntry, that.mEntry);
-            std::swap(mPool, that.mPool);
-            return *this;
-        }
-
-        ~HTTPConnectionPtr() {
-            if (mEntry) {
-                mEntry->mLastAccess = std::chrono::steady_clock::now();
-                mEntry->mInuse.store(false, std::memory_order_release);
-                mPool->mFreeSlot.notify_one();
-            }
-        }
-
-        HTTPConnection &operator*() const noexcept {
-            return mEntry->mHttp;
-        }
-
-        HTTPConnection *operator->() const noexcept {
-            return &mEntry->mHttp;
-        }
-    };
-
-    explicit HTTPConnectionPool(
-        std::size_t connPerHost = 8,
-        std::chrono::steady_clock::duration timeout = std::chrono::seconds(20),
-        std::chrono::steady_clock::duration keepAlive = std::chrono::minutes(3),
-        bool followProxy = true)
-        : mTimeout(timeout),
-          mKeepAlive(keepAlive),
-          mConnPerHost(connPerHost),
-          mFollowProxy(followProxy) {}
-
-private:
-    std::optional<Expected<HTTPConnectionPtr>>
-    lookForFreeSlot(std::string_view host) /* MT-safe */ {
-        std::shared_lock lock(mMutex);
-        auto *pool = mPools.at(host);
-        lock.unlock();
-        if (!pool) {
-            std::lock_guard wlock(mMutex);
-            pool = mPools.at(host);
-            if (!pool) [[likely]] {
-                pool = &mPools.emplace(std::string(host), mConnPerHost);
-            }
-        }
-        for (auto &entry: pool->mPool) {
-            bool expected = false;
-            if (entry.mInuse.compare_exchange_strong(
-                    expected, true, std::memory_order_acq_rel)) {
-                if (entry.mValid) {
-                    entry.mLastAccess = std::chrono::steady_clock::now();
-                } else {
-                    if (auto e =
-                            entry.mHttp.doConnect(host, mTimeout, mFollowProxy);
-                        e.has_error()) [[unlikely]] {
-                        return std::move(e).error();
-                    }
-                    entry.mLastAccess = std::chrono::steady_clock::now();
-                    entry.mValid = true;
-                }
-                return HTTPConnectionPtr(&entry, pool);
-            }
-        }
-        return std::nullopt;
-    }
-
-    Task<> waitForFreeSlot(std::string_view host) /* MT-safe */ {
-        std::shared_lock lock(mMutex);
-        auto *pool = mPools.at(host);
-        lock.unlock();
-        if (pool) [[likely]] {
-            (void)co_await co_timeout(pool->mFreeSlot.wait(),
-                                      std::chrono::milliseconds(100));
-        }
-        co_return;
-    }
-
-    void garbageCollect() /* MT-safe */ {
-        auto now = std::chrono::steady_clock::now();
-        if ((now - mLastGC) * 2 > mKeepAlive) {
-            std::shared_lock lock(mMutex);
-            for (auto &[_, pool]: mPools) {
-                for (auto &entry: pool.mPool) {
-                    bool expected = false;
-                    if (entry.mInuse.compare_exchange_strong(
-                            expected, true, std::memory_order_acq_rel)) {
-                        if (entry.mValid &&
-                            now - entry.mLastAccess > mKeepAlive) {
-                            entry.mHttp.terminateLifetime();
-                            entry.mValid = false;
-                        }
-                        entry.mInuse.store(false, std::memory_order_release);
-                    }
-                }
-                mLastGC = now;
-            }
-        }
-    }
-
-public:
-    Task<Expected<HTTPConnectionPtr>>
-    connect(std::string_view host) /* MT-safe */ {
-    again:
-        garbageCollect();
-        if (auto conn = lookForFreeSlot(host)) {
-            co_return std::move(*conn);
-        }
-        co_await waitForFreeSlot(host);
-        goto again;
-    }
-};
-} // namespace co_async
-
-
-
-
-
-
-
-
-
-
-
-
-#include <hashlib/hashlib.hpp>
-
-namespace co_async {
-
-// 小彭老师带你用 C++ 实现 WebSocket 协议
-// WebSocket 是为了解决 HTTP 协议的一些缺陷而提出的
-// 过去，HTTP 只能客户端单向地往服务端发出请求，服务端被动地返回响应
-// 要获取服务端的动态数据，只能通过轮询或长轮询的形式（参见上一期视频）
-// 在聊天室这种少量人员的场景中，轮询还扛得住，但在实时音视频，直播领域，HTTP 轮询的延迟就太高了
-// 而 WebSocket 是一种双向通信协议，建立连接后，服务端和客户端都能主动向对方发送或接收数据
-// WebSocket 面向二进制字节流，类似于 TCP，比基于文本传输数据的 HTTP 协议更高效
-// 主流浏览器都提供 WebSocket 的 API，可以实现浏览器和服务器的双向实时通信
-// 我们这一期视频主要来实现 C++ 的服务器端，要求能够与浏览器中的 JS 建立 WebSocket 连接
-// 如果时间来得及，我们希望利用这个 WebSocket 服务器实现实时语音通话
-
-inline std::string websocketGenerateNonce() {
-    uint32_t seed = getSeedByTime();
-    uint8_t buf[16];
-    for (size_t i = 0; i != 16; ++i) {
-        seed = wangsHash(seed);
-        buf[i] = static_cast<uint8_t>(seed & 0xFF);
-    }
-    return base64::encode_into<std::string>(buf, buf + 16);
-}
-
-inline std::string websocketSecretHash(std::string userKey) {
-    // websocket 官方要求的神秘仪式
-    SHA1 sha1;
-    std::string inKey = userKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-    sha1.add(inKey.data(), inKey.size());
-    uint8_t buf[SHA1::HashBytes];
-    sha1.getHash(buf);
-    return base64::encode_into<std::string>(buf, buf + SHA1::HashBytes);
-}
-
-inline Task<Expected<bool>> httpUpgradeToWebSocket(HTTPServer::IO &io) {
-    if (io.request.headers.get("upgrade") != "websocket") {
-        co_return false;
-    }
-    // 是 ws:// 请求
-    auto wsKey = io.request.headers.get("sec-websocket-key");
-    if (!wsKey) {
-        co_await co_await HTTPServerUtils::make_error_response(io, 400);
-        co_return true;
-    }
-    auto wsNewKey = websocketSecretHash(*wsKey);
-    HTTPResponse res{
-        .status = 101,
-        .headers =
-        {
-            {"connection", "Upgrade"},
-            {"upgrade", "websocket"},
-            {"sec-websocket-accept", wsNewKey},
-        },
-    };
-    co_await co_await io.response(res, "");
-    co_return true;
-}
-
-struct WebSocketPacket {
-    enum Opcode : uint8_t {
-        kOpcodeText = 1,
-        kOpcodeBinary = 2,
-        kOpcodeClose = 8,
-        kOpcodePing = 9,
-        kOpcodePong = 10,
-    } opcode;
-    std::string content;
-
-    REFLECT(opcode, content);
-};
-
-inline Task<Expected<WebSocketPacket>> wsRecvPacket(BorrowedStream &ws) {
-    WebSocketPacket packet;
-    auto head = co_await co_await ws.getn(2);
-    bool fin;
-    do {
-        uint8_t head0 = static_cast<uint8_t>(head[0]);
-        uint8_t head1 = static_cast<uint8_t>(head[1]);
-        fin = (head0 & 0x80) != 0;
-        packet.opcode = static_cast<WebSocketPacket::Opcode>(head0 & 0x0F);
-        bool masked = (head1 & 0x80) != 0;
-        uint8_t payloadLen8 = head1 & 0x7F;
-        size_t payloadLen;
-        if (packet.opcode >= 8 && packet.opcode <= 10 && payloadLen8 >= 0x7E) [[unlikely]] {
-            co_return std::errc::protocol_error;
-        }
-        if (payloadLen8 == 0x7E) {
-            auto payloadLen16 = byteswap_if_little(co_await co_await ws.getstruct<uint16_t>());
-            payloadLen = static_cast<size_t>(payloadLen16);
-        } else if (payloadLen8 == 0x7F) {
-            auto payloadLen64 = byteswap_if_little(co_await co_await ws.getstruct<uint64_t>());
-            if constexpr (sizeof(uint64_t) > sizeof(size_t)) {
-                if (payloadLen64 > std::numeric_limits<size_t>::max()) {
-                    co_return std::errc::not_enough_memory;
-                }
-            }
-            payloadLen = static_cast<size_t>(payloadLen64);
-        } else {
-            payloadLen = static_cast<size_t>(payloadLen8);
-        }
-        std::string mask;
-        if (masked) {
-            mask = co_await co_await ws.getn(4);
-        }
-        auto data = co_await co_await ws.getn(payloadLen);
-        if (masked) {
-            for (size_t i = 0; i != data.size(); ++i) {
-                data[i] ^= mask[i % 4];
-            }
-        }
-        packet.content += data;
-    } while (!fin);
-    co_return std::move(packet);
-}
-
-inline Task<Expected<>> wsSendPacket(BorrowedStream &ws, WebSocketPacket packet, uint32_t mask = 0) {
-    const bool fin = true;
-    bool masked = mask != 0;
-    uint8_t payloadLen8 = 0;
-    if (packet.content.size() < 0x7E) {
-        payloadLen8 = static_cast<uint8_t>(packet.content.size());
-    } else if (packet.content.size() <= 0xFFFF) {
-        payloadLen8 = 0x7E;
-    } else {
-        payloadLen8 = 0x7F;
-    }
-    uint8_t head0 = (fin ? 1 : 0) << 7 | static_cast<uint8_t>(packet.opcode);
-    uint8_t head1 = (masked ? 1 : 0) << 7 | payloadLen8;
-    char head[2];
-    head[0] = static_cast<uint8_t>(head0);
-    head[1] = static_cast<uint8_t>(head1);
-    co_await co_await ws.write(head);
-    if (packet.content.size() > 0x7E) {
-        if (packet.content.size() <= 0xFFFF) {
-            auto payloadLen16 = static_cast<uint16_t>(packet.content.size());
-            co_await co_await ws.putstruct(byteswap_if_little(payloadLen16));
-        } else {
-            auto payloadLen64 = static_cast<uint64_t>(packet.content.size());
-            co_await co_await ws.putstruct(byteswap_if_little(payloadLen64));
-        }
-    }
-    if (masked) {
-        char mask_buf[4];
-        mask_buf[0] = mask >> 24;
-        mask_buf[1] = (mask >> 16) & 0xFF;
-        mask_buf[2] = (mask >> 8) & 0xFF;
-        mask_buf[3] = mask & 0xFF;
-        co_await co_await ws.write(mask_buf);
-        for (size_t i = 0; i != packet.content.size(); ++i) {
-            packet.content[i] ^= mask_buf[i % 4];
-        }
-    }
-    co_await co_await ws.write(packet.content);
-    co_await co_await ws.flush();
-    co_return {};
-}
-
-struct WebSocket {
-    BorrowedStream &sock;
-    std::function<Task<Expected<>>(std::string const &)> mOnMessage;
-    std::function<Task<Expected<>>()> mOnClose;
-    std::function<Task<Expected<>>(std::chrono::steady_clock::duration)> mOnPong;
-    bool mHalfClosed = false;
-    bool mWaitingPong = true;
-    std::chrono::steady_clock::time_point mLastPingTime{};
-
-    WebSocket(WebSocket &&) = default;
-
-    explicit WebSocket(BorrowedStream &sock) : sock(sock) {
-    }
-
-    bool is_closing() const noexcept {
-        return mHalfClosed;
-    }
-
-    void on_message(std::function<Task<Expected<>>(std::string const &)> onMessage) {
-        mOnMessage = std::move(onMessage);
-    }
-
-    void on_close(std::function<Task<Expected<>>()> onClose) {
-        mOnClose = std::move(onClose);
-    }
-
-    void on_pong(std::function<Task<Expected<>>(std::chrono::steady_clock::duration)> onPong) {
-        mOnPong = std::move(onPong);
-    }
-
-    Task<Expected<>> send(std::string text) {
-        if (mHalfClosed) [[unlikely]] {
-            co_return std::errc::broken_pipe;
-        }
-        co_return co_await wsSendPacket(sock, WebSocketPacket{
-            .opcode = WebSocketPacket::kOpcodeText,
-            .content = text,
-        });
-    }
-
-    Task<Expected<>> close(uint16_t code = 1000) {
-        std::string content;
-        code = byteswap_if_little(code);
-        content.resize(sizeof(code));
-        std::memcpy(content.data(), &code, sizeof(code));
-        mHalfClosed = true;
-        co_return co_await wsSendPacket(sock, WebSocketPacket{
-            .opcode = WebSocketPacket::kOpcodeClose,
-            .content = content,
-        });
-    }
-
-    Task<Expected<>> sendPing() {
-        mLastPingTime = std::chrono::steady_clock::now();
-        // debug(), "主动ping";
-        co_return co_await wsSendPacket(sock, WebSocketPacket{
-            .opcode = WebSocketPacket::kOpcodePing,
-            .content = {},
-        });
-    }
-
-    Task<Expected<>> start(std::chrono::steady_clock::duration pingPongTimeout = std::chrono::seconds(5)) {
-        while (true) {
-            auto maybePacket = co_await co_timeout(wsRecvPacket(sock), pingPongTimeout);
-            if (maybePacket == std::errc::stream_timeout) {
-                if (mWaitingPong) {
-                    break;
-                }
-                co_await co_await sendPing();
-                mWaitingPong = true;
-                continue;
-            }
-            mWaitingPong = false;
-            if (maybePacket == eofError()) {
-                break;
-            }
-            auto packet = co_await std::move(maybePacket);
-            if (packet.opcode == packet.kOpcodeText || packet.opcode == packet.kOpcodeBinary) {
-                if (mOnMessage) {
-                    co_await co_await mOnMessage(packet.content);
-                }
-            } else if (packet.opcode == packet.kOpcodePing) {
-                // debug(), "收到ping";
-                packet.opcode = packet.kOpcodePong;
-                co_await co_await wsSendPacket(sock, packet);
-            } else if (packet.opcode == packet.kOpcodePong) {
-                auto now = std::chrono::steady_clock::now();
-                if (mOnPong && mLastPingTime.time_since_epoch().count() != 0) {
-                    auto dt = now - mLastPingTime;
-                    co_await co_await mOnPong(dt);
-                    // debug(), "网络延迟:", dt;
-                }
-                // debug(), "收到pong";
-            } else if (packet.opcode == packet.kOpcodeClose) {
-                // debug(), "收到关闭请求";
-                if (mOnClose) {
-                    co_await co_await mOnClose();
-                }
-                if (!mHalfClosed) {
-                    co_await co_await wsSendPacket(sock, packet);
-                    mHalfClosed = true;
-                } else {
-                    break;
-                }
-            }
-        }
-        co_await sock.close();
-        co_return {};
-    }
-};
-
-inline Task<Expected<WebSocket>> websocket_server(HTTPServer::IO &io) {
-    if (co_await co_await httpUpgradeToWebSocket(io)) {
-        co_return WebSocket(io.extractSocket());
-    }
-    co_return std::errc::protocol_error;
-}
-
-inline Task<Expected<WebSocket>> websocket_client(HTTPConnection &conn, URI uri) {
-    std::string nonceKey;
-    using namespace std::string_literals;
-    nonceKey = websocketGenerateNonce();
-    HTTPRequest request = {
-        .method = "GET"s,
-        .uri = uri,
-        .headers = {
-            {"sec-websocket-key"s, nonceKey},
-            {"connection"s, "Upgrade"s},
-            {"upgrade"s, "websocket"s},
-            {"sec-websocket-version"s, "13"s},
-        },
-    };
-    auto [response, _] = co_await co_await conn.request(request);
-    if (response.headers.get("sec-websocket-accept") != websocketSecretHash(nonceKey)) {
-        co_return std::errc::protocol_error;
-    }
-    co_return WebSocket(conn.extractSocket());
-}
-
-}
 
 
 
@@ -13223,6 +13386,163 @@ inline struct DefaultResource : std::pmr::memory_resource {
 } defaultResource;
 } // namespace
 #endif
+} // namespace co_async
+
+
+
+
+namespace co_async {
+
+// bool GenericIOContext::runComputeOnly() {
+//     if (auto coroutine = mQueue.pop()) {
+//         coroutine->resume();
+//         return true;
+//     }
+//     return false;
+// }
+//
+GenericIOContext::GenericIOContext() = default;
+GenericIOContext::~GenericIOContext() = default;
+
+std::optional<std::chrono::steady_clock::duration>
+GenericIOContext::runDuration() {
+    while (true) {
+        if (!mTimers.empty()) {
+            auto &promise = mTimers.front();
+            std::chrono::steady_clock::time_point now =
+                std::chrono::steady_clock::now();
+            if (promise.mExpires <= now) {
+                promise.mCancelled = false;
+                promise.erase_from_parent();
+                std::coroutine_handle<TimerNode>::from_promise(promise).resume();
+                continue;
+            } else {
+                return promise.mExpires - now;
+            }
+        } else {
+            return std::nullopt;
+        }
+    }
+}
+
+//
+// void GenericIOContext::startMain(std::stop_token stop) {
+//     while (!stop.stop_requested()) [[likely]] {
+//         auto duration = runDuration();
+//         if (duration) {
+//             std::this_thread::sleep_for(*duration);
+//         } else {
+//             break;
+//         }
+//     }
+// }
+//
+} // namespace co_async
+
+
+
+
+
+
+
+
+
+namespace co_async {
+
+IOContext::IOContext(IOContextOptions options) {
+    if (instance) {
+        throw std::logic_error("each thread may create only one IOContext");
+    }
+    instance = this;
+    GenericIOContext::instance = &mGenericIO;
+    PlatformIOContext::instance = &mPlatformIO;
+    if (options.threadAffinity) {
+        PlatformIOContext::schedSetThreadAffinity(*options.threadAffinity);
+    }
+    mPlatformIO.setup(options.queueEntries);
+    mMaxSleep = options.maxSleep;
+}
+
+IOContext::~IOContext() {
+    IOContext::instance = nullptr;
+    GenericIOContext::instance = nullptr;
+    PlatformIOContext::instance = nullptr;
+}
+
+void IOContext::run() {
+    while (runOnce())
+        ;
+}
+
+bool IOContext::runOnce() {
+    auto duration = mGenericIO.runDuration();
+    if (!duration && !mPlatformIO.hasPendingEvents()) [[unlikely]] {
+        return false;
+    }
+    if (!duration || *duration > mMaxSleep) {
+        duration = mMaxSleep;
+    }
+    mPlatformIO.waitEventsFor(duration);
+    return true;
+}
+
+thread_local IOContext *IOContext::instance;
+
+// void IOContext::wakeUp() {
+//     if (mWake.fetch_add(1, std::memory_order_relaxed) == 0)
+//         futex_notify_sync(&mWake, 1);
+// }
+//
+// Task<void, IgnoreReturnPromise<AutoDestroyFinalAwaiter>>
+// IOContext::watchDogTask() {
+//     // helps wake up main loop when IOContext::spawn called
+//     while (true) {
+//         while (mWake.load(std::memory_order_relaxed) == 0)
+//             (void)co_await futex_wait(&mWake, 0);
+//         mWake.store(0, std::memory_order_relaxed);
+//     }
+// }
+
+} // namespace co_async
+
+
+
+
+
+
+
+
+namespace co_async {
+IOContextMT::IOContextMT() {
+    if (IOContextMT::instance) [[unlikely]] {
+        throw std::logic_error("each process may contain only one IOContextMT");
+    }
+    IOContextMT::instance = this;
+}
+
+IOContextMT::~IOContextMT() {
+    IOContextMT::instance = nullptr;
+}
+
+void IOContextMT::run(std::size_t numWorkers) {
+    // if (numWorkers == 0) {
+    //     setAffinity = true;
+    //     numWorkers = std::thread::hardware_concurrency();
+    //     if (!numWorkers) [[unlikely]] {
+    //         throw std::logic_error(
+    //             "failed to detect number of hardware threads");
+    //     }
+    // } else {
+    //     setAffinity = false;
+    // }
+    instance->mWorkers = std::make_unique<IOContext[]>(numWorkers);
+    instance->mNumWorkers = numWorkers;
+    for (std::size_t i = 0; i < instance->mNumWorkers; ++i) {
+        instance->mWorkers[i].run();
+    }
+}
+
+IOContextMT *IOContextMT::instance;
 } // namespace co_async
 
 
@@ -13381,65 +13701,123 @@ ThreadPool::~ThreadPool() = default;
 
 
 
+#include <dirent.h>
+
+namespace co_async {
+namespace {
+struct DirectoryStream : Stream {
+    Task<Expected<std::size_t>> raw_read(std::span<char> buffer) override {
+        co_return co_await fs_getdents(mFile, buffer);
+    }
+
+    FileHandle release() noexcept {
+        return std::move(mFile);
+    }
+
+    FileHandle &get() noexcept {
+        return mFile;
+    }
+
+    explicit DirectoryStream(FileHandle file) : mFile(std::move(file)) {}
+
+private:
+    FileHandle mFile;
+};
+} // namespace
+
+DirectoryWalker::DirectoryWalker(FileHandle file)
+    : mStream(make_stream<DirectoryStream>(std::move(file))) {}
+
+DirectoryWalker::~DirectoryWalker() = default;
+
+Task<Expected<String>> DirectoryWalker::DirectoryWalker::next() {
+    struct LinuxDirent64 {
+        int64_t d_ino;           /* 64-bit inode number */
+        int64_t d_off;           /* 64-bit offset to next structure */
+        unsigned short d_reclen; /* Size of this dirent */
+        unsigned char d_type;    /* File type */
+    } dent;
+
+    co_await co_await mStream.getspan(
+        std::span<char>(reinterpret_cast<char *>(&dent), 19));
+    String rest;
+    rest.reserve(dent.d_reclen - 19);
+    co_await co_await mStream.getn(rest, dent.d_reclen - 19);
+    co_return String(rest.data());
+}
+
+Task<Expected<DirectoryWalker>> dir_open(std::filesystem::path path) {
+    auto handle = co_await co_await fs_open(path, OpenMode::Directory);
+    co_return DirectoryWalker(std::move(handle));
+}
+} // namespace co_async
+
+
+
+
 
 
 
 namespace co_async {
+namespace {
+struct FileStream : Stream {
+    Task<Expected<std::size_t>> raw_read(std::span<char> buffer) override {
+        co_return co_await fs_read(mFile, buffer, co_await co_cancel);
+    }
 
-IOContext::IOContext(IOContextOptions options) {
-    if (instance) {
-        throw std::logic_error("each thread may create only one IOContext");
+    Task<Expected<std::size_t>>
+    raw_write(std::span<char const> buffer) override {
+        co_return co_await fs_write(mFile, buffer, co_await co_cancel);
     }
-    instance = this;
-    GenericIOContext::instance = &mGenericIO;
-    PlatformIOContext::instance = &mPlatformIO;
-    if (options.threadAffinity) {
-        PlatformIOContext::schedSetThreadAffinity(*options.threadAffinity);
+
+    Task<> raw_close() override {
+        (co_await fs_close(std::move(mFile))).value_or();
     }
-    mPlatformIO.setup(options.queueEntries);
-    mMaxSleep = options.maxSleep;
+
+    FileHandle release() noexcept {
+        return std::move(mFile);
+    }
+
+    FileHandle &get() noexcept {
+        return mFile;
+    }
+
+    explicit FileStream(FileHandle file) : mFile(std::move(file)) {}
+
+private:
+    FileHandle mFile;
+};
+} // namespace
+
+Task<Expected<OwningStream>> file_open(std::filesystem::path path,
+                                       OpenMode mode) {
+    co_return make_stream<FileStream>(co_await co_await fs_open(path, mode));
 }
 
-IOContext::~IOContext() {
-    IOContext::instance = nullptr;
-    GenericIOContext::instance = nullptr;
-    PlatformIOContext::instance = nullptr;
+OwningStream file_from_handle(FileHandle handle) {
+    return make_stream<FileStream>(std::move(handle));
 }
 
-void IOContext::run() {
-    while (runOnce())
-        ;
+Task<Expected<String>> file_read(std::filesystem::path path) {
+    auto file = co_await co_await file_open(path, OpenMode::Read);
+    co_return co_await file.getall();
 }
 
-bool IOContext::runOnce() {
-    auto duration = mGenericIO.runDuration();
-    if (!duration && !mPlatformIO.hasPendingEvents()) [[unlikely]] {
-        return false;
-    }
-    if (!duration || *duration > mMaxSleep) {
-        duration = mMaxSleep;
-    }
-    mPlatformIO.waitEventsFor(duration);
-    return true;
+Task<Expected<>> file_write(std::filesystem::path path,
+                            std::string_view content) {
+    auto file = co_await co_await file_open(path, OpenMode::Write);
+    co_await co_await file.puts(content);
+    co_await co_await file.flush();
+    co_return {};
 }
 
-thread_local IOContext *IOContext::instance;
-
-// void IOContext::wakeUp() {
-//     if (mWake.fetch_add(1, std::memory_order_relaxed) == 0)
-//         futex_notify_sync(&mWake, 1);
-// }
-//
-// Task<void, IgnoreReturnPromise<AutoDestroyFinalAwaiter>>
-// IOContext::watchDogTask() {
-//     // helps wake up main loop when IOContext::spawn called
-//     while (true) {
-//         while (mWake.load(std::memory_order_relaxed) == 0)
-//             (void)co_await futex_wait(&mWake, 0);
-//         mWake.store(0, std::memory_order_relaxed);
-//     }
-// }
-
+Task<Expected<>> file_append(std::filesystem::path path,
+                             std::string_view content) {
+    auto file = co_await co_await file_open(path, OpenMode::Append);
+    co_await co_await file.puts(content);
+    co_await co_await file.flush();
+    co_return {};
+}
 } // namespace co_async
 
 
@@ -13450,854 +13828,102 @@ thread_local IOContext *IOContext::instance;
 
 
 namespace co_async {
-IOContextMT::IOContextMT() {
-    if (IOContextMT::instance) [[unlikely]] {
-        throw std::logic_error("each process may contain only one IOContextMT");
+
+namespace {
+
+struct PipeStreamBuffer {
+    ConcurrentQueue<std::string> mChunks{64};
+};
+
+struct IPipeStream : Stream {
+    Task<Expected<std::size_t>> raw_read(std::span<char> buffer) override {
+#if CO_ASYNC_DEBUG
+        auto e = co_await mPipe->mChunks.pop();
+        if (e.has_error()) {
+            std::cerr << "PipeStreamBuffer::pop(): " << e.error().message() << '\n';
+            co_return CO_ASYNC_ERROR_FORWARD(e);
+        }
+        auto chunk = *e;
+#else
+        auto chunk = co_await co_await mPipe->mChunks.pop();
+#endif
+        auto n = std::min(buffer.size(), chunk.size());
+        std::memcpy(buffer.data(), chunk.data(), n);
+        co_return n;
     }
-    IOContextMT::instance = this;
-}
 
-IOContextMT::~IOContextMT() {
-    IOContextMT::instance = nullptr;
-}
-
-void IOContextMT::run(std::size_t numWorkers) {
-    // if (numWorkers == 0) {
-    //     setAffinity = true;
-    //     numWorkers = std::thread::hardware_concurrency();
-    //     if (!numWorkers) [[unlikely]] {
-    //         throw std::logic_error(
-    //             "failed to detect number of hardware threads");
-    //     }
-    // } else {
-    //     setAffinity = false;
-    // }
-    instance->mWorkers = std::make_unique<IOContext[]>(numWorkers);
-    instance->mNumWorkers = numWorkers;
-    for (std::size_t i = 0; i < instance->mNumWorkers; ++i) {
-        instance->mWorkers[i].run();
+    Task<> raw_close() override {
+        mPipe.reset();
+        co_return;
     }
-}
 
-IOContextMT *IOContextMT::instance;
-} // namespace co_async
+    explicit IPipeStream(std::shared_ptr<PipeStreamBuffer> buffer)
+        : mPipe(std::move(buffer)) {}
 
+private:
+    std::shared_ptr<PipeStreamBuffer> mPipe;
+};
 
-
-
-namespace co_async {
-
-// bool GenericIOContext::runComputeOnly() {
-//     if (auto coroutine = mQueue.pop()) {
-//         coroutine->resume();
-//         return true;
-//     }
-//     return false;
-// }
-//
-GenericIOContext::GenericIOContext() = default;
-GenericIOContext::~GenericIOContext() = default;
-
-std::optional<std::chrono::steady_clock::duration>
-GenericIOContext::runDuration() {
-    while (true) {
-        if (!mTimers.empty()) {
-            auto &promise = mTimers.front();
-            std::chrono::steady_clock::time_point now =
-                std::chrono::steady_clock::now();
-            if (promise.mExpires <= now) {
-                promise.mCancelled = false;
-                promise.erase_from_parent();
-                std::coroutine_handle<TimerNode>::from_promise(promise).resume();
-                continue;
-            } else {
-                return promise.mExpires - now;
+struct OPipeStream : Stream {
+    Task<Expected<std::size_t>>
+    raw_write(std::span<char const> buffer) override {
+        if (auto p = mPipe.lock()) [[likely]] {
+            if (buffer.empty()) [[unlikely]] {
+                co_return std::size_t(0);
             }
+            co_await co_await p->mChunks.push(
+                std::string(buffer.data(), buffer.size()));
+            co_return buffer.size();
         } else {
-            return std::nullopt;
+            co_return std::errc::broken_pipe;
         }
     }
-}
 
-//
-// void GenericIOContext::startMain(std::stop_token stop) {
-//     while (!stop.stop_requested()) [[likely]] {
-//         auto duration = runDuration();
-//         if (duration) {
-//             std::this_thread::sleep_for(*duration);
-//         } else {
-//             break;
-//         }
-//     }
-// }
-//
-} // namespace co_async
-
-
-
-
-
-#include <fcntl.h>
-#include <liburing.h>
-#include <sched.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h>
-
-namespace co_async {
-void PlatformIOContext::schedSetThreadAffinity(size_t cpu) {
-    cpu_set_t cpu_set;
-    CPU_ZERO(&cpu_set);
-    CPU_SET(cpu, &cpu_set);
-    throwingErrorErrno(
-        sched_setaffinity(gettid(), sizeof(cpu_set_t), &cpu_set));
-}
-
-PlatformIOContext::IOUringProbe::IOUringProbe() {
-    mRing = nullptr;
-    // mProbe = io_uring_get_probe();
-    mProbe = nullptr;
-    if (!mProbe) {
-        mRing = new struct io_uring;
-        throwingError(io_uring_queue_init(8, mRing, 0));
-    }
-}
-
-PlatformIOContext::IOUringProbe::~IOUringProbe() {
-    if (mProbe) {
-        io_uring_free_probe(mProbe);
-    }
-    if (mRing) {
-        io_uring_queue_exit(mRing);
-        delete mRing;
-    }
-}
-
-bool PlatformIOContext::IOUringProbe::isSupported(int op) noexcept {
-    if (mProbe) {
-        return io_uring_opcode_supported(mProbe, op);
-    }
-    if (mRing) {
-        struct io_uring_sqe *sqe = io_uring_get_sqe(mRing);
-        io_uring_prep_rw(op, sqe, -1, nullptr, 0, 0);
-        struct io_uring_cqe *cqe;
-        throwingError(io_uring_submit(mRing));
-        throwingError(io_uring_wait_cqe(mRing, &cqe));
-        int res = cqe->res;
-        io_uring_cqe_seen(mRing, cqe);
-        return res != ENOSYS;
-    }
-    return false;
-}
-
-void PlatformIOContext::IOUringProbe::dumpDiagnostics() {
-    static char const *ops[IORING_OP_LAST + 1] = {
-        "IORING_OP_NOP",
-        "IORING_OP_READV",
-        "IORING_OP_WRITEV",
-        "IORING_OP_FSYNC",
-        "IORING_OP_READ_FIXED",
-        "IORING_OP_WRITE_FIXED",
-        "IORING_OP_POLL_ADD",
-        "IORING_OP_POLL_REMOVE",
-        "IORING_OP_SYNC_FILE_RANGE",
-        "IORING_OP_SENDMSG",
-        "IORING_OP_RECVMSG",
-        "IORING_OP_TIMEOUT",
-        "IORING_OP_TIMEOUT_REMOVE",
-        "IORING_OP_ACCEPT",
-        "IORING_OP_ASYNC_CANCEL",
-        "IORING_OP_LINK_TIMEOUT",
-        "IORING_OP_CONNECT",
-        "IORING_OP_FALLOCATE",
-        "IORING_OP_OPENAT",
-        "IORING_OP_CLOSE",
-        "IORING_OP_FILES_UPDATE",
-        "IORING_OP_STATX",
-        "IORING_OP_READ",
-        "IORING_OP_WRITE",
-        "IORING_OP_FADVISE",
-        "IORING_OP_MADVISE",
-        "IORING_OP_SEND",
-        "IORING_OP_RECV",
-        "IORING_OP_OPENAT2",
-        "IORING_OP_EPOLL_CTL",
-        "IORING_OP_SPLICE",
-        "IORING_OP_PROVIDE_BUFFERS",
-        "IORING_OP_REMOVE_BUFFERS",
-        "IORING_OP_TEE",
-        "IORING_OP_SHUTDOWN",
-        "IORING_OP_RENAMEAT",
-        "IORING_OP_UNLINKAT",
-        "IORING_OP_MKDIRAT",
-        "IORING_OP_SYMLINKAT",
-        "IORING_OP_LINKAT",
-        "IORING_OP_MSG_RING",
-        "IORING_OP_FSETXATTR",
-        "IORING_OP_SETXATTR",
-        "IORING_OP_FGETXATTR",
-        "IORING_OP_GETXATTR",
-        "IORING_OP_SOCKET",
-        "IORING_OP_URING_CMD",
-        "IORING_OP_SEND_ZC",
-        "IORING_OP_SENDMSG_ZC",
-        "IORING_OP_READ_MULTISHOT",
-        "IORING_OP_WAITID",
-        "IORING_OP_FUTEX_WAIT",
-        "IORING_OP_FUTEX_WAKE",
-        "IORING_OP_FUTEX_WAITV",
-        "IORING_OP_FIXED_FD_INSTALL",
-        "IORING_OP_FTRUNCATE",
-        "IORING_OP_LAST",
-    };
-    for (int op = IORING_OP_NOP; op < IORING_OP_LAST; ++op) {
-        bool ok = isSupported(op);
-        std::cerr << "opcode " << ops[op] << (ok ? "" : " not") << " supported"
-                  << '\n';
-    }
-}
-
-PlatformIOContext::PlatformIOContext() noexcept {
-    mRing.ring_fd = -1;
-}
-
-void PlatformIOContext::setup(std::size_t entries) {
-    unsigned int flags = 0;
-#if CO_ASYNC_DIRECT
-    flags |= IORING_SETUP_IOPOLL;
-#endif
-    throwingError(
-        io_uring_queue_init(static_cast<unsigned int>(entries), &mRing, flags));
-}
-
-void PlatformIOContext::reserveBuffers(std::size_t nbufs) {
-    auto oldBuf = std::move(mBuffers);
-    mBuffers = std::make_unique<struct iovec[]>(nbufs);
-    if (mCapBufs) {
-        throwingError(io_uring_unregister_buffers(&mRing));
-    }
-    mCapBufs = static_cast<unsigned int>(nbufs);
-    std::memcpy(mBuffers.get(), oldBuf.get(), sizeof(struct iovec) * mNumBufs);
-    throwingError(io_uring_register_buffers_sparse(
-        &mRing, static_cast<unsigned int>(nbufs)));
-    std::vector<__u64> tags(mNumBufs, 0);
-    throwingError(io_uring_register_buffers_update_tag(
-        &mRing, 0, mBuffers.get(), tags.data(),
-        static_cast<unsigned int>(mNumBufs)));
-}
-
-std::size_t
-PlatformIOContext::addBuffers(std::span<std::span<char> const> bufs) {
-    if (mNumBufs >= mCapBufs) {
-        reserveBuffers(mCapBufs * 2 + 1);
-    }
-    auto outP = mBuffers.get() + mNumBufs;
-    for (auto const &buf: bufs) {
-        struct iovec iov;
-        iov.iov_base = buf.data();
-        iov.iov_len = buf.size();
-        *outP++ = iov;
-    }
-    std::vector<__u64> tags(bufs.size(), 0);
-    throwingError(io_uring_register_buffers_update_tag(
-        &mRing, mNumBufs, mBuffers.get() + mNumBufs, tags.data(),
-        static_cast<unsigned int>(bufs.size())));
-    size_t ret = mNumBufs;
-    mNumBufs += static_cast<unsigned int>(bufs.size());
-    return ret;
-}
-
-void PlatformIOContext::reserveFiles(std::size_t nfiles) {
-    auto oldBuf = std::move(mBuffers);
-    mBuffers = std::make_unique<struct iovec[]>(nfiles);
-    if (mCapFiles) {
-        throwingError(io_uring_unregister_files(&mRing));
-    }
-    mCapFiles = static_cast<unsigned int>(nfiles);
-    std::memcpy(mBuffers.get(), oldBuf.get(), sizeof(struct iovec) * mNumBufs);
-    throwingError(io_uring_register_files_sparse(
-        &mRing, static_cast<unsigned int>(nfiles)));
-    std::vector<__u64> tags(mNumFiles, 0);
-    throwingError(io_uring_register_files_update_tag(&mRing, 0, mFiles.get(),
-                                                     tags.data(), mNumFiles));
-}
-
-std::size_t PlatformIOContext::addFiles(std::span<int const> files) {
-    if (mNumFiles >= mCapFiles) {
-        reserveBuffers(mCapFiles * 2 + 1);
-    }
-    auto outP = mFiles.get() + mNumFiles;
-    for (auto const &file: files) {
-        *outP++ = file;
-    }
-    std::vector<__u64> tags(files.size(), 0);
-    throwingError(io_uring_register_files_update_tag(
-        &mRing, mNumFiles, mFiles.get() + mNumFiles, tags.data(),
-        static_cast<unsigned int>(files.size())));
-    size_t ret = mNumFiles;
-    mNumFiles += static_cast<unsigned int>(files.size());
-    return ret;
-}
-
-PlatformIOContext::~PlatformIOContext() {
-    if (mRing.ring_fd != -1) {
-        io_uring_queue_exit(&mRing);
-    }
-}
-
-thread_local PlatformIOContext *PlatformIOContext::instance;
-
-bool PlatformIOContext::waitEventsFor(
-    std::optional<std::chrono::steady_clock::duration> timeout) {
-    // debug(), "wait", this, mNumSqesPending;
-    struct io_uring_cqe *cqe;
-    struct __kernel_timespec ts, *tsp;
-    if (timeout) {
-        tsp = &(ts = durationToKernelTimespec(*timeout));
-    } else {
-        tsp = nullptr;
-    }
-    int res = io_uring_submit_and_wait_timeout(&mRing, &cqe, 1, tsp, nullptr);
-    if (res == -ETIME) {
-        return false;
-    } else if (res < 0) [[unlikely]] {
-        if (res == -EINTR) {
-            return false;
+    Task<> raw_close() override {
+        if (auto p = mPipe.lock()) {
+            (void)co_await p->mChunks.push(std::string());
         }
-        throw std::system_error(-res, std::system_category());
+        co_return;
     }
-    unsigned head, numGot = 0;
-    std::vector<std::coroutine_handle<>> tasks;
-    io_uring_for_each_cqe(&mRing, head, cqe) {
-#if CO_ASYNC_INVALFIX
-        if (cqe->user_data == LIBURING_UDATA_TIMEOUT) [[unlikely]] {
-            ++numGot;
-            continue;
+
+    ~OPipeStream() {
+        if (auto p = mPipe.lock()) {
+            p->mChunks.try_push(std::string());
         }
-#endif
-        auto *op = reinterpret_cast<UringOp *>(cqe->user_data);
-        op->mRes = cqe->res;
-        tasks.push_back(op->mPrevious);
-        ++numGot;
     }
-    io_uring_cq_advance(&mRing, numGot);
-    mNumSqesPending -= static_cast<std::size_t>(numGot);
-    for (auto const &task: tasks) {
-#if CO_ASYNC_DEBUG
-        if (!task) [[likely]] {
-            std::cerr << "null coroutine pushed into task queue\n";
+
+    explicit OPipeStream(std::weak_ptr<PipeStreamBuffer> buffer)
+        : mPipe(std::move(buffer)) {}
+
+private:
+    std::weak_ptr<PipeStreamBuffer> mPipe;
+};
+
+} // namespace
+
+std::array<OwningStream, 2> pipe_stream() {
+    auto pipePtr = std::make_shared<PipeStreamBuffer>();
+    auto pipeWeakPtr = std::weak_ptr(pipePtr);
+    return std::array{make_stream<IPipeStream>(std::move(pipePtr)),
+                      make_stream<OPipeStream>(std::move(pipeWeakPtr))};
+}
+
+Task<Expected<>> pipe_forward(BorrowedStream &in, BorrowedStream &out) {
+    while (true) {
+        if (in.bufempty()) {
+            if (!co_await in.fillbuf()) {
+                break;
+            }
         }
-        if (task.done()) [[likely]] {
-            std::cerr << "done coroutine pushed into task queue\n";
+        auto n = co_await co_await out.write(in.peekbuf());
+        if (n == 0) [[unlikely]] {
+            co_return std::errc::broken_pipe;
         }
-#endif
-        task.resume();
+        in.seenbuf(n);
     }
-    return true;
-}
-} // namespace co_async
-
-#include <arpa/inet.h>
-
-
-
-
-
-
-
-
-#include <netdb.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <sys/un.h>
-#include <unistd.h>
-
-namespace co_async {
-std::error_category const &getAddrInfoCategory() {
-    static struct final : std::error_category {
-        char const *name() const noexcept override {
-            return "getaddrinfo";
-        }
-
-        std::string message(int e) const override {
-            return gai_strerror(e);
-        }
-    } instance;
-
-    return instance;
+    co_return {};
 }
 
-// Expected<IpAddress> IpAddress::fromString(char const *host) {
-//     struct in_addr addr = {};
-//     struct in6_addr addr6 = {};
-//     if (1 == inet_pton(AF_INET, host, &addr)) {
-//         return IpAddress(addr);
-//     }
-//     if (1 == inet_pton(AF_INET6, host, &addr6)) {
-//         return IpAddress(addr6);
-//     }
-//     // gethostbyname is deprecated, let's use getaddrinfo instead:
-//     struct addrinfo hints = {};
-//     hints.ai_family = AF_UNSPEC;
-//     hints.ai_socktype = SOCK_STREAM;
-//     struct addrinfo *result;
-//     int err = getaddrinfo(host, nullptr, &hints, &result);
-//     if (err) [[unlikely]] {
-// #if CO_ASYNC_DEBUG
-//         std::cerr << host << ": " << gai_strerror(err) << '\n';
-// #endif
-//         return std::error_code(err, getAddrInfoCategory());
-//     }
-//     Finally fin = [&] {
-//         freeaddrinfo(result);
-//     };
-//     for (struct addrinfo *rp = result; rp != nullptr; rp = rp->ai_next) {
-//         if (rp->ai_family == AF_INET) {
-//             std::memcpy(&addr, &reinterpret_cast<struct sockaddr_in
-//             *>(rp->ai_addr)->sin_addr,
-//                         sizeof(in_addr));
-//             return IpAddress(addr);
-//         } else if (rp->ai_family == AF_INET6) {
-//             std::memcpy(&addr6,
-//                         &reinterpret_cast<struct sockaddr_in6
-//                         *>(rp->ai_addr)->sin6_addr, sizeof(in6_addr));
-//             return IpAddress(addr6);
-//         }
-//     }
-//     [[unlikely]] {
-// #if CO_ASYNC_DEBUG
-//         std::cerr << host << ": no matching host address with ipv4 or
-//         ipv6\n";
-// #endif
-//         return std::errc::bad_address;
-//     }
-// }
-//
-// String IpAddress::toString() const {
-//     if (mAddr.index() == 1) {
-//         char buf[INET6_ADDRSTRLEN + 1] = {};
-//         inet_ntop(AF_INET6, &std::get<1>(mAddr), buf, sizeof(buf));
-//         return buf;
-//     } else if (mAddr.index() == 0) {
-//         char buf[INET_ADDRSTRLEN + 1] = {};
-//         inet_ntop(AF_INET, &std::get<0>(mAddr), buf, sizeof(buf));
-//         return buf;
-//     } else {
-//         return "[invalid ip address or domain name]";
-//     }
-// }
-
-auto AddressResolver::resolve_all() -> Expected<ResolveResult> {
-    // gethostbyname is deprecated, let's use getaddrinfo instead:
-    if (m_host.empty()) [[unlikely]] {
-        return std::errc::invalid_argument;
-    }
-    struct addrinfo *result;
-    int err = getaddrinfo(m_host.c_str(),
-                          m_service.empty() ? nullptr : m_service.c_str(),
-                          &m_hints, &result);
-    if (err) [[unlikely]] {
-#if CO_ASYNC_DEBUG
-        std::cerr << m_host << ": " << gai_strerror(err) << '\n';
-#endif
-        return std::error_code(err, getAddrInfoCategory());
-    }
-    Finally fin = [&] {
-        freeaddrinfo(result);
-    };
-    ResolveResult res;
-    for (struct addrinfo *rp = result; rp != nullptr; rp = rp->ai_next) {
-        res.addrs
-            .emplace_back(rp->ai_addr, rp->ai_addrlen, rp->ai_family,
-                          rp->ai_socktype, rp->ai_protocol)
-            .trySetPort(m_port);
-    }
-    if (res.addrs.empty()) [[unlikely]] {
-#if CO_ASYNC_DEBUG
-        std::cerr << m_host << ": no matching host address\n";
-#endif
-        return std::errc::bad_address;
-    }
-    res.service = std::move(m_service);
-    return res;
-}
-
-Expected<SocketAddress> AddressResolver::resolve_one() {
-    auto res = resolve_all();
-    if (res.has_error()) [[unlikely]] {
-        return res.error();
-    }
-    return res->addrs.front();
-}
-
-Expected<SocketAddress> AddressResolver::resolve_one(std::string &service) {
-    auto res = resolve_all();
-    if (res.has_error()) [[unlikely]] {
-        return res.error();
-    }
-    service = std::move(res->service);
-    return res->addrs.front();
-}
-
-SocketAddress::SocketAddress(struct sockaddr const *addr, socklen_t addrLen,
-                             sa_family_t family, int sockType, int protocol)
-    : mSockType(sockType),
-      mProtocol(protocol) {
-    std::memcpy(&mAddr, addr, addrLen);
-    mAddr.ss_family = family;
-    mAddrLen = addrLen;
-}
-
-std::string SocketAddress::host() const {
-    if (family() == AF_INET) {
-        auto &sin =
-            reinterpret_cast<struct sockaddr_in const &>(mAddr).sin_addr;
-        char buf[INET_ADDRSTRLEN] = {};
-        inet_ntop(family(), &sin, buf, sizeof(buf));
-        return buf;
-    } else if (family() == AF_INET6) {
-        auto &sin6 =
-            reinterpret_cast<struct sockaddr_in6 const &>(mAddr).sin6_addr;
-        char buf[INET6_ADDRSTRLEN] = {};
-        inet_ntop(AF_INET6, &sin6, buf, sizeof(buf));
-        return buf;
-    } else [[unlikely]] {
-        throw std::runtime_error("address family not ipv4 or ipv6");
-    }
-}
-
-int SocketAddress::port() const {
-    if (family() == AF_INET) {
-        auto port =
-            reinterpret_cast<struct sockaddr_in const &>(mAddr).sin_port;
-        return ntohs(port);
-    } else if (family() == AF_INET6) {
-        auto port =
-            reinterpret_cast<struct sockaddr_in6 const &>(mAddr).sin6_port;
-        return ntohs(port);
-    } else [[unlikely]] {
-        throw std::runtime_error("address family not ipv4 or ipv6");
-    }
-}
-
-void SocketAddress::trySetPort(int port) {
-    if (family() == AF_INET) {
-        reinterpret_cast<struct sockaddr_in &>(mAddr).sin_port =
-            htons(static_cast<uint16_t>(port));
-    } else if (family() == AF_INET6) {
-        reinterpret_cast<struct sockaddr_in6 &>(mAddr).sin6_port =
-            htons(static_cast<uint16_t>(port));
-    }
-}
-
-String SocketAddress::toString() const {
-    return host() + ':' + to_string(port());
-}
-
-// void SocketAddress::initFromHostPort(struct in_addr const &host, int port) {
-//     struct sockaddr_in saddr = {};
-//     saddr.sin_family = AF_INET;
-//     std::memcpy(&saddr.sin_addr, &host, sizeof(saddr.sin_addr));
-//     saddr.sin_port = htons(static_cast<uint16_t>(port));
-//     std::memcpy(&mAddrIpv4, &saddr, sizeof(saddr));
-//     mAddrLen = sizeof(saddr);
-// }
-//
-// void SocketAddress::initFromHostPort(struct in6_addr const &host, int port) {
-//     struct sockaddr_in6 saddr = {};
-//     saddr.sin6_family = AF_INET6;
-//     std::memcpy(&saddr.sin6_addr, &host, sizeof(saddr.sin6_addr));
-//     saddr.sin6_port = htons(static_cast<uint16_t>(port));
-//     std::memcpy(&mAddrIpv6, &saddr, sizeof(saddr));
-//     mAddrLen = sizeof(saddr);
-// }
-
-SocketAddress get_socket_address(SocketHandle &sock) {
-    SocketAddress sa;
-    sa.mAddrLen = sizeof(sa.mAddr);
-    throwingErrorErrno(getsockname(
-        sock.fileNo(), reinterpret_cast<struct sockaddr *>(&sa.mAddr),
-        &sa.mAddrLen));
-    return sa;
-}
-
-SocketAddress get_socket_peer_address(SocketHandle &sock) {
-    SocketAddress sa;
-    sa.mAddrLen = sizeof(sa.mAddr);
-    throwingErrorErrno(getpeername(
-        sock.fileNo(), reinterpret_cast<struct sockaddr *>(&sa.mAddr),
-        &sa.mAddrLen));
-    return sa;
-}
-
-Task<Expected<SocketHandle>> createSocket(int family, int type, int protocol) {
-    int fd = co_await expectError(
-                 co_await UringOp().prep_socket(family, type, protocol, 0))
-#if CO_ASYNC_INVALFIX
-                 .or_else(std::errc::invalid_argument,
-                           [&] { return socket(family, type, protocol); })
-#endif
-        ;
-    SocketHandle sock(fd);
-    co_return sock;
-}
-
-Task<Expected<SocketHandle>> socket_connect(SocketAddress const &addr) {
-    SocketHandle sock = co_await co_await createSocket(
-        addr.family(), addr.socktype(), addr.protocol());
-    co_await expectError(co_await UringOp().prep_connect(
-        sock.fileNo(), reinterpret_cast<const struct sockaddr *>(&addr.mAddr),
-        addr.mAddrLen))
-#if CO_ASYNC_INVALFIX
-                 .or_else(std::errc::invalid_argument, [&] { return connect(sock.fileNo(),
-        reinterpret_cast<const struct sockaddr *>(&addr.mAddr), addr.mAddrLen); })
-#endif
-        ;
-    co_return sock;
-}
-
-Task<Expected<SocketHandle>>
-socket_connect(SocketAddress const &addr,
-               std::chrono::steady_clock::duration timeout) {
-    SocketHandle sock = co_await co_await createSocket(
-        addr.family(), addr.socktype(), addr.protocol());
-    auto ts = durationToKernelTimespec(timeout);
-    co_await expectError(co_await UringOp::link_ops(
-        UringOp().prep_connect(
-            sock.fileNo(),
-            reinterpret_cast<const struct sockaddr *>(&addr.mAddr),
-            addr.mAddrLen),
-        UringOp().prep_link_timeout(&ts, IORING_TIMEOUT_BOOTTIME)))
-#if CO_ASYNC_INVALFIX
-                 .or_else(std::errc::invalid_argument, [&] { return connect(sock.fileNo(),
-        reinterpret_cast<const struct sockaddr *>(&addr.mAddr), addr.mAddrLen); })
-#endif
-        ;
-    co_return sock;
-}
-
-Task<Expected<SocketHandle>> socket_connect(SocketAddress const &addr,
-                                            CancelToken cancel) {
-    SocketHandle sock =
-        co_await co_await createSocket(addr.family(), SOCK_STREAM, 0);
-    if (cancel.is_canceled()) [[unlikely]] {
-        co_return std::errc::operation_canceled;
-    }
-    co_await expectError(
-        co_await UringOp()
-            .prep_connect(
-                sock.fileNo(),
-                reinterpret_cast<const struct sockaddr *>(&addr.mAddr),
-                addr.mAddrLen)
-            .cancelGuard(cancel))
-#if CO_ASYNC_INVALFIX
-                 .or_else(std::errc::invalid_argument, [&] { return connect(sock.fileNo(),
-        reinterpret_cast<const struct sockaddr *>(&addr.mAddr), addr.mAddrLen); })
-#endif
-        ;
-    co_return sock;
-}
-
-Task<Expected<SocketListener>> listener_bind(SocketAddress const &addr,
-                                             int backlog) {
-    SocketHandle sock =
-        co_await co_await createSocket(addr.family(), SOCK_STREAM, 0);
-    co_await socketSetOption(sock, SOL_SOCKET, SO_REUSEADDR, 1);
-    co_await socketSetOption(sock, SOL_SOCKET, SO_REUSEPORT, 1);
-    /* co_await socketSetOption(sock, IPPROTO_TCP, TCP_CORK, 0); */
-    /* co_await socketSetOption(sock, IPPROTO_TCP, TCP_NODELAY, 1); */
-    /* co_await socketSetOption(sock, SOL_SOCKET, SO_KEEPALIVE, 1); */
-    SocketListener serv(sock.releaseFile());
-    co_await expectError(bind(
-        serv.fileNo(), reinterpret_cast<struct sockaddr const *>(&addr.mAddr),
-        addr.mAddrLen));
-    co_await expectError(listen(serv.fileNo(), backlog));
-    co_return serv;
-}
-
-Task<Expected<SocketHandle>> listener_accept(SocketListener &listener) {
-    int fd = co_await expectError(
-        co_await UringOp().prep_accept(listener.fileNo(), nullptr, nullptr, 0));
-    SocketHandle sock(fd);
-    co_return sock;
-}
-
-Task<Expected<SocketHandle>> listener_accept(SocketListener &listener,
-                                             CancelToken cancel) {
-    int fd = co_await expectError(
-        co_await UringOp()
-            .prep_accept(listener.fileNo(), nullptr, nullptr, 0)
-            .cancelGuard(cancel));
-    SocketHandle sock(fd);
-    co_return sock;
-}
-
-Task<Expected<SocketHandle>> listener_accept(SocketListener &listener,
-                                             SocketAddress &peerAddr) {
-    int fd = co_await expectError(co_await UringOp().prep_accept(
-        listener.fileNo(), reinterpret_cast<struct sockaddr *>(&peerAddr.mAddr),
-        &peerAddr.mAddrLen, 0))
-#if CO_ASYNC_INVALFIX
-        .or_else(std::errc::invalid_argument, [&] { return expectError(accept4(
-                         listener.fileNo(), reinterpret_cast<struct sockaddr *>(&peerAddr.mAddr),
-                         &peerAddr.mAddrLen, 0)); })
-#endif
-        ;
-    SocketHandle sock(fd);
-    co_return sock;
-}
-
-Task<Expected<SocketHandle>> listener_accept(SocketListener &listener,
-                                             SocketAddress &peerAddr,
-                                             CancelToken cancel) {
-    int fd = co_await expectError(
-        co_await UringOp()
-            .prep_accept(listener.fileNo(),
-                         reinterpret_cast<struct sockaddr *>(&peerAddr.mAddr),
-                         &peerAddr.mAddrLen, 0)
-            .cancelGuard(cancel))
-#if CO_ASYNC_INVALFIX
-        .or_else(std::errc::invalid_argument, [&] { return expectError(accept4(
-                         listener.fileNo(), reinterpret_cast<struct sockaddr *>(&peerAddr.mAddr),
-                         &peerAddr.mAddrLen, 0)); })
-#endif
-        ;
-    SocketHandle sock(fd);
-    co_return sock;
-}
-
-Task<Expected<std::size_t>> socket_write(SocketHandle &sock,
-                                         std::span<char const> buf) {
-    co_return static_cast<std::size_t>(co_await expectError(
-        co_await UringOp().prep_send(sock.fileNo(), buf, 0))
-#if CO_ASYNC_INVALFIX
-        .or_else(std::errc::invalid_argument, [&] { return expectError(send(sock.fileNo(), buf.data(), buf.size(), 0)); })
-#endif
-                                       );
-}
-
-Task<Expected<std::size_t>> socket_write_zc(SocketHandle &sock,
-                                            std::span<char const> buf) {
-    co_return static_cast<std::size_t>(co_await expectError(
-        co_await UringOp().prep_send_zc(sock.fileNo(), buf, 0, 0))
-#if CO_ASYNC_INVALFIX
-        .or_else(std::errc::invalid_argument, [&] { return expectError(send(sock.fileNo(), buf.data(), buf.size(), 0)); })
-#endif
-                                       );
-}
-
-Task<Expected<std::size_t>> socket_read(SocketHandle &sock,
-                                        std::span<char> buf) {
-    co_return static_cast<std::size_t>(co_await expectError(
-        co_await UringOp().prep_recv(sock.fileNo(), buf, 0))
-#if CO_ASYNC_INVALFIX
-        .or_else(std::errc::invalid_argument, [&] { return expectError(recv(sock.fileNo(), buf.data(), buf.size(), 0)); })
-#endif
-        );
-}
-
-Task<Expected<std::size_t>> socket_write(SocketHandle &sock,
-                                         std::span<char const> buf,
-                                         CancelToken cancel) {
-    co_return static_cast<std::size_t>(
-        co_await expectError(co_await UringOp()
-                                 .prep_send(sock.fileNo(), buf, 0)
-                                 .cancelGuard(cancel))
-#if CO_ASYNC_INVALFIX
-        .or_else(std::errc::invalid_argument, [&] { return expectError(send(sock.fileNo(), buf.data(), buf.size(), 0)); })
-#endif
-    );
-}
-
-Task<Expected<std::size_t>> socket_write_zc(SocketHandle &sock,
-                                            std::span<char const> buf,
-                                            CancelToken cancel) {
-    co_return static_cast<std::size_t>(
-        co_await expectError(co_await UringOp()
-                                 .prep_send_zc(sock.fileNo(), buf, 0, 0)
-                                 .cancelGuard(cancel))
-#if CO_ASYNC_INVALFIX
-        .or_else(std::errc::invalid_argument, [&] { return expectError(send(sock.fileNo(), buf.data(), buf.size(), 0)); })
-#endif
-    );
-}
-
-Task<Expected<std::size_t>> socket_read(SocketHandle &sock, std::span<char> buf,
-                                        CancelToken cancel) {
-    co_return static_cast<std::size_t>(
-        co_await expectError(co_await UringOp()
-                                 .prep_recv(sock.fileNo(), buf, 0)
-                                 .cancelGuard(cancel))
-#if CO_ASYNC_INVALFIX
-        .or_else(std::errc::invalid_argument, [&] { return expectError(recv(sock.fileNo(), buf.data(), buf.size(), 0)); })
-#endif
-        );
-}
-
-Task<Expected<std::size_t>>
-socket_write(SocketHandle &sock, std::span<char const> buf,
-             std::chrono::steady_clock::duration timeout) {
-    auto ts = durationToKernelTimespec(timeout);
-    co_return static_cast<std::size_t>(
-        co_await expectError(co_await UringOp::link_ops(
-            UringOp().prep_send(sock.fileNo(), buf, 0),
-            UringOp().prep_link_timeout(&ts, IORING_TIMEOUT_BOOTTIME)))
-#if CO_ASYNC_INVALFIX
-        .or_else(std::errc::invalid_argument, [&] { return expectError(send(sock.fileNo(), buf.data(), buf.size(), 0)); })
-#endif
-        );
-}
-
-Task<Expected<std::size_t>>
-socket_read(SocketHandle &sock, std::span<char> buf,
-            std::chrono::steady_clock::duration timeout) {
-    auto ts = durationToKernelTimespec(timeout);
-    co_return static_cast<std::size_t>(
-        co_await expectError(co_await UringOp::link_ops(
-            UringOp().prep_recv(sock.fileNo(), buf, 0),
-            UringOp().prep_link_timeout(&ts, IORING_TIMEOUT_BOOTTIME)))
-#if CO_ASYNC_INVALFIX
-        .or_else(std::errc::invalid_argument, [&] { return expectError(recv(sock.fileNo(), buf.data(), buf.size(), 0)); })
-#endif
-        );
-}
-
-Task<Expected<std::size_t>>
-socket_write(SocketHandle &sock, std::span<char const> buf,
-             std::chrono::steady_clock::duration timeout, CancelToken cancel) {
-    auto ts = durationToKernelTimespec(timeout);
-    co_return static_cast<std::size_t>(co_await expectError(
-        co_await UringOp::link_ops(
-            UringOp().prep_send(sock.fileNo(), buf, 0),
-            UringOp().prep_link_timeout(&ts, IORING_TIMEOUT_BOOTTIME))
-            .cancelGuard(cancel))
-#if CO_ASYNC_INVALFIX
-        .or_else(std::errc::invalid_argument, [&] { return expectError(send(sock.fileNo(), buf.data(), buf.size(), 0)); })
-#endif
-    );
-}
-
-Task<Expected<std::size_t>>
-socket_read(SocketHandle &sock, std::span<char> buf,
-            std::chrono::steady_clock::duration timeout, CancelToken cancel) {
-    auto ts = durationToKernelTimespec(timeout);
-    co_return static_cast<std::size_t>(co_await expectError(
-        co_await UringOp::link_ops(
-            UringOp().prep_recv(sock.fileNo(), buf, 0),
-            UringOp().prep_link_timeout(&ts, IORING_TIMEOUT_BOOTTIME))
-            .cancelGuard(cancel))
-#if CO_ASYNC_INVALFIX
-        .or_else(std::errc::invalid_argument, [&] { return expectError(recv(sock.fileNo(), buf.data(), buf.size(), 0)); })
-#endif
-        );
-}
-
-Task<Expected<>> socket_shutdown(SocketHandle &sock, int how) {
-    co_return expectError(co_await UringOp().prep_shutdown(sock.fileNo(), how));
-}
 } // namespace co_async
 
 #include <bearssl.h>
@@ -14315,7 +13941,7 @@ Task<Expected<>> socket_shutdown(SocketHandle &sock, int how) {
 
 namespace co_async {
 std::error_category const &bearSSLCategory() {
-    static struct final : std::error_category {
+    static struct : std::error_category {
         char const *name() const noexcept override {
             return "BearSSL";
         }
@@ -15060,180 +14686,6 @@ DefinePImpl(SSLServerSessionCache);
 
 
 
-
-
-
-namespace co_async {
-
-namespace {
-
-struct PipeStreamBuffer {
-    ConcurrentQueue<std::string> mChunks{64};
-};
-
-struct IPipeStream : Stream {
-    Task<Expected<std::size_t>> raw_read(std::span<char> buffer) override {
-#if CO_ASYNC_DEBUG
-        auto e = co_await mPipe->mChunks.pop();
-        if (e.has_error()) {
-            std::cerr << "PipeStreamBuffer::pop(): " << e.error().message() << '\n';
-            co_return CO_ASYNC_ERROR_FORWARD(e);
-        }
-        auto chunk = *e;
-#else
-        auto chunk = co_await co_await mPipe->mChunks.pop();
-#endif
-        auto n = std::min(buffer.size(), chunk.size());
-        std::memcpy(buffer.data(), chunk.data(), n);
-        co_return n;
-    }
-
-    Task<> raw_close() override {
-        mPipe.reset();
-        co_return;
-    }
-
-    explicit IPipeStream(std::shared_ptr<PipeStreamBuffer> buffer)
-        : mPipe(std::move(buffer)) {}
-
-private:
-    std::shared_ptr<PipeStreamBuffer> mPipe;
-};
-
-struct OPipeStream : Stream {
-    Task<Expected<std::size_t>>
-    raw_write(std::span<char const> buffer) override {
-        if (auto p = mPipe.lock()) [[likely]] {
-            if (buffer.empty()) [[unlikely]] {
-                co_return std::size_t(0);
-            }
-            co_await co_await p->mChunks.push(
-                std::string(buffer.data(), buffer.size()));
-            co_return buffer.size();
-        } else {
-            co_return std::errc::broken_pipe;
-        }
-    }
-
-    Task<> raw_close() override {
-        if (auto p = mPipe.lock()) {
-            (void)co_await p->mChunks.push(std::string());
-        }
-        co_return;
-    }
-
-    ~OPipeStream() {
-        if (auto p = mPipe.lock()) {
-            p->mChunks.try_push(std::string());
-        }
-    }
-
-    explicit OPipeStream(std::weak_ptr<PipeStreamBuffer> buffer)
-        : mPipe(std::move(buffer)) {}
-
-private:
-    std::weak_ptr<PipeStreamBuffer> mPipe;
-};
-
-} // namespace
-
-std::array<OwningStream, 2> pipe_stream() {
-    auto pipePtr = std::make_shared<PipeStreamBuffer>();
-    auto pipeWeakPtr = std::weak_ptr(pipePtr);
-    return std::array{make_stream<IPipeStream>(std::move(pipePtr)),
-                      make_stream<OPipeStream>(std::move(pipeWeakPtr))};
-}
-
-Task<Expected<>> pipe_forward(BorrowedStream &in, BorrowedStream &out) {
-    while (true) {
-        if (in.bufempty()) {
-            if (!co_await in.fillbuf()) {
-                break;
-            }
-        }
-        auto n = co_await co_await out.write(in.peekbuf());
-        if (n == 0) [[unlikely]] {
-            co_return std::errc::broken_pipe;
-        }
-        in.seenbuf(n);
-    }
-    co_return {};
-}
-
-} // namespace co_async
-
-
-
-
-
-
-
-namespace co_async {
-namespace {
-struct FileStream : Stream {
-    Task<Expected<std::size_t>> raw_read(std::span<char> buffer) override {
-        co_return co_await fs_read(mFile, buffer, co_await co_cancel);
-    }
-
-    Task<Expected<std::size_t>>
-    raw_write(std::span<char const> buffer) override {
-        co_return co_await fs_write(mFile, buffer, co_await co_cancel);
-    }
-
-    Task<> raw_close() override {
-        (co_await fs_close(std::move(mFile))).value_or();
-    }
-
-    FileHandle release() noexcept {
-        return std::move(mFile);
-    }
-
-    FileHandle &get() noexcept {
-        return mFile;
-    }
-
-    explicit FileStream(FileHandle file) : mFile(std::move(file)) {}
-
-private:
-    FileHandle mFile;
-};
-} // namespace
-
-Task<Expected<OwningStream>> file_open(std::filesystem::path path,
-                                       OpenMode mode) {
-    co_return make_stream<FileStream>(co_await co_await fs_open(path, mode));
-}
-
-OwningStream file_from_handle(FileHandle handle) {
-    return make_stream<FileStream>(std::move(handle));
-}
-
-Task<Expected<String>> file_read(std::filesystem::path path) {
-    auto file = co_await co_await file_open(path, OpenMode::Read);
-    co_return co_await file.getall();
-}
-
-Task<Expected<>> file_write(std::filesystem::path path,
-                            std::string_view content) {
-    auto file = co_await co_await file_open(path, OpenMode::Write);
-    co_await co_await file.puts(content);
-    co_await co_await file.flush();
-    co_return {};
-}
-
-Task<Expected<>> file_append(std::filesystem::path path,
-                             std::string_view content) {
-    auto file = co_await co_await file_open(path, OpenMode::Append);
-    co_await co_await file.puts(content);
-    co_await co_await file.flush();
-    co_return {};
-}
-} // namespace co_async
-
-
-
-
-
 #include <termios.h>
 #include <unistd.h>
 
@@ -15300,62 +14752,6 @@ OwningStream &raw_stdio() {
     static thread_local OwningStream s = make_stream<StdioStream>(
         rawStdinFileHandle(), stdFileHandle<STDOUT_FILENO>());
     return s;
-}
-} // namespace co_async
-
-
-
-
-
-
-#include <dirent.h>
-
-namespace co_async {
-namespace {
-struct DirectoryStream : Stream {
-    Task<Expected<std::size_t>> raw_read(std::span<char> buffer) override {
-        co_return co_await fs_getdents(mFile, buffer);
-    }
-
-    FileHandle release() noexcept {
-        return std::move(mFile);
-    }
-
-    FileHandle &get() noexcept {
-        return mFile;
-    }
-
-    explicit DirectoryStream(FileHandle file) : mFile(std::move(file)) {}
-
-private:
-    FileHandle mFile;
-};
-} // namespace
-
-DirectoryWalker::DirectoryWalker(FileHandle file)
-    : mStream(make_stream<DirectoryStream>(std::move(file))) {}
-
-DirectoryWalker::~DirectoryWalker() = default;
-
-Task<Expected<String>> DirectoryWalker::DirectoryWalker::next() {
-    struct LinuxDirent64 {
-        int64_t d_ino;           /* 64-bit inode number */
-        int64_t d_off;           /* 64-bit offset to next structure */
-        unsigned short d_reclen; /* Size of this dirent */
-        unsigned char d_type;    /* File type */
-    } dent;
-
-    co_await co_await mStream.getspan(
-        std::span<char>(reinterpret_cast<char *>(&dent), 19));
-    String rest;
-    rest.reserve(dent.d_reclen - 19);
-    co_await co_await mStream.getn(rest, dent.d_reclen - 19);
-    co_return String(rest.data());
-}
-
-Task<Expected<DirectoryWalker>> dir_open(std::filesystem::path path) {
-    auto handle = co_await co_await fs_open(path, OpenMode::Directory);
-    co_return DirectoryWalker(std::move(handle));
 }
 } // namespace co_async
 
@@ -15510,145 +14906,6 @@ Task<Expected<>> zlib_deflate(BorrowedStream &source, BorrowedStream &dest) {
     co_return std::errc::function_not_supported;
 }
 #endif
-} // namespace co_async
-
-
-
-
-
-namespace co_async {
-namespace {
-std::uint8_t fromHex(char c) {
-    if ('0' <= c && c <= '9') {
-        return static_cast<std::uint8_t>(c - '0');
-    } else if ('A' <= c && c <= 'F') {
-        return static_cast<std::uint8_t>(c - 'A' + 10);
-    } else [[unlikely]] {
-        return 0;
-    }
-}
-
-bool isCharUrlSafe(char c) {
-    if ('0' <= c && c <= '9') {
-        return true;
-    }
-    if ('a' <= c && c <= 'z') {
-        return true;
-    }
-    if ('A' <= c && c <= 'Z') {
-        return true;
-    }
-    if (c == '-' || c == '_' || c == '.') {
-        return true;
-    }
-    return false;
-}
-} // namespace
-
-void URI::url_decode(String &r, std::string_view s) {
-    std::size_t b = 0;
-    while (true) {
-        auto i = s.find('%', b);
-        if (i == std::string_view::npos || i + 3 > s.size()) {
-            r.append(s.data() + b, s.data() + s.size());
-            break;
-        }
-        r.append(s.data() + b, s.data() + i);
-        char c1 = s[i + 1];
-        char c2 = s[i + 2];
-        r.push_back(static_cast<char>((fromHex(c1) << 4) | fromHex(c2)));
-        b = i + 3;
-    }
-}
-
-String URI::url_decode(std::string_view s) {
-    String r;
-    r.reserve(s.size());
-    url_decode(r, s);
-    return r;
-}
-
-void URI::url_encode(String &r, std::string_view s) {
-    static constexpr char lut[] = "0123456789ABCDEF";
-    for (char c: s) {
-        if (isCharUrlSafe(c)) {
-            r.push_back(c);
-        } else {
-            r.push_back('%');
-            r.push_back(lut[static_cast<std::uint8_t>(c) >> 4]);
-            r.push_back(lut[static_cast<std::uint8_t>(c) & 0xF]);
-        }
-    }
-}
-
-String URI::url_encode(std::string_view s) {
-    String r;
-    r.reserve(s.size());
-    url_encode(r, s);
-    return r;
-}
-
-void URI::url_encode_path(String &r, std::string_view s) {
-    static constexpr char lut[] = "0123456789ABCDEF";
-    for (char c: s) {
-        if (isCharUrlSafe(c) || c == '/') {
-            r.push_back(c);
-        } else {
-            r.push_back('%');
-            r.push_back(lut[static_cast<std::uint8_t>(c) >> 4]);
-            r.push_back(lut[static_cast<std::uint8_t>(c) & 0xF]);
-        }
-    }
-}
-
-String URI::url_encode_path(std::string_view s) {
-    String r;
-    r.reserve(s.size());
-    url_encode_path(r, s);
-    return r;
-}
-
-URI URI::parse(std::string_view uri) {
-    auto path = uri;
-    URIParams params;
-    if (auto i = uri.find('?'); i != std::string_view::npos) {
-        path = uri.substr(0, i);
-        do {
-            uri.remove_prefix(i + 1);
-            i = uri.find('&');
-            auto pair = uri.substr(0, i);
-            auto m = pair.find('=');
-            if (m != std::string_view::npos) {
-                auto k = pair.substr(0, m);
-                auto v = pair.substr(m + 1);
-                params.insert_or_assign(String(k), url_decode(v));
-            }
-        } while (i != std::string_view::npos);
-    }
-    String spath(path);
-    if (spath.empty() || spath.front() != '/') [[unlikely]] {
-        spath.insert(spath.begin(), '/');
-    }
-    return URI{spath, std::move(params)};
-}
-
-void URI::dump(String &r) const {
-    r.append(path);
-    char queryChar = '?';
-    for (auto &[k, v]: params) {
-        r.push_back(queryChar);
-        url_encode(r, k);
-        r.push_back('=');
-        url_encode(r, v);
-        queryChar = '&';
-    }
-}
-
-String URI::dump() const {
-    String r;
-    dump(r);
-    return r;
-}
 } // namespace co_async
 
 
@@ -16106,384 +15363,6 @@ HTTPProtocolVersion11::~HTTPProtocolVersion11() = default;
 
 
 
-namespace co_async {
-String HTTPServerUtils::html_encode(std::string_view str) {
-    String res;
-    res.reserve(str.size());
-    for (auto c: str) {
-        switch (c) {
-        case '&':  res.append("&amp;"); break;
-        case '"':  res.append("&quot;"); break;
-        case '\'': res.append("&apos;"); break;
-        case '<':  res.append("&lt;"); break;
-        case '>':  res.append("&gt;"); break;
-        default:   res.push_back(c);
-        }
-    }
-    return res;
-}
-
-Task<Expected<>> HTTPServerUtils::make_ok_response(HTTPServer::IO &io,
-                                                   std::string_view body,
-                                                   String contentType) {
-    HTTPResponse res{
-        .status = 200,
-        .headers =
-            {
-                {"content-type", std::move(contentType)},
-            },
-    };
-    co_await co_await io.response(res, body);
-    co_return {};
-}
-
-Task<Expected<>>
-HTTPServerUtils::make_response_from_directory(HTTPServer::IO &io,
-                                              std::filesystem::path path) {
-    String dirPath{path.generic_string()};
-    String content = "<h1>Files in " + dirPath + ":</h1>";
-    auto parentPath = path.parent_path().generic_string();
-    content +=
-        "<a href=\"/" + URI::url_encode_path(parentPath) + "\">..</a><br>";
-    auto dir = co_await co_await dir_open(path);
-    while (auto entry = co_await dir.next()) {
-        if (*entry == ".." || *entry == ".") {
-            continue;
-        }
-        content +=
-            "<a href=\"/" +
-            URI::url_encode_path(make_path(dirPath, *entry).generic_string()) +
-            "\">" + html_encode(*entry) + "</a><br>";
-    }
-    co_await co_await make_ok_response(io, content);
-    co_return {};
-}
-
-Task<Expected<>> HTTPServerUtils::make_error_response(HTTPServer::IO &io,
-                                                      int status) {
-    auto error = to_string(status) + ' ' + String(getHTTPStatusName(status));
-    HTTPResponse res{
-        .status = status,
-        .headers =
-            {
-                {"content-type", "text/html;charset=utf-8"},
-            },
-    };
-    co_await co_await io.response(
-        res, "<html><head><title>" + error +
-                 "</title></head><body><center><h1>" + error +
-                 "</h1></center><hr><center>co_async</center></body></html>");
-    co_return {};
-}
-
-Task<Expected<>> HTTPServerUtils::make_response_from_file_or_directory(
-    HTTPServer::IO &io, std::filesystem::path path) {
-    auto stat = co_await fs_stat(path, STATX_MODE);
-    if (!stat) [[unlikely]] {
-        co_return co_await make_error_response(io, 404);
-    }
-    if (!stat->is_readable()) [[unlikely]] {
-        co_return co_await make_error_response(io, 403);
-    }
-    if (stat->is_directory()) {
-        co_return co_await make_response_from_directory(io, std::move(path));
-    }
-    HTTPResponse res{
-        .status = 200,
-        .headers =
-            {
-                {"content-type",
-                 guessContentTypeByExtension(path.extension().string())},
-            },
-    };
-    auto f = co_await co_await file_open(path, OpenMode::Read);
-    co_await co_await io.response(res, f);
-    co_await f.close();
-    co_return {};
-}
-
-Task<Expected<>>
-HTTPServerUtils::make_response_from_path(HTTPServer::IO &io,
-                                         std::filesystem::path path) {
-    auto stat = co_await fs_stat(path, STATX_MODE);
-    if (!stat) [[unlikely]] {
-        co_return co_await make_error_response(io, 404);
-    }
-    if (!stat->is_readable()) [[unlikely]] {
-        co_return co_await make_error_response(io, 403);
-    }
-    if (stat->is_directory()) {
-        co_return co_await make_response_from_directory(io, path);
-    }
-    /* if (stat->is_executable()) { */
-    /*     co_return co_await make_response_from_cgi_script(io, path); */
-    /* } */
-    HTTPResponse res{
-        .status = 200,
-        .headers =
-            {
-                {"content-type",
-                 guessContentTypeByExtension(path.extension().string())},
-            },
-    };
-    auto f = co_await co_await file_open(path, OpenMode::Read);
-    co_await co_await io.response(res, f);
-    co_await f.close();
-    co_return {};
-}
-
-Task<Expected<>>
-HTTPServerUtils::make_response_from_file(HTTPServer::IO &io,
-                                         std::filesystem::path path) {
-    auto stat = co_await fs_stat(path, STATX_MODE);
-    if (!stat || stat->is_directory()) [[unlikely]] {
-        co_return co_await make_error_response(io, 404);
-    }
-    if (!stat->is_readable()) [[unlikely]] {
-        co_return co_await make_error_response(io, 403);
-    }
-    HTTPResponse res{
-        .status = 200,
-        .headers =
-            {
-                {"content-type",
-                 guessContentTypeByExtension(path.extension().string())},
-            },
-    };
-    auto f = co_await co_await file_open(path, OpenMode::Read);
-    co_await co_await io.response(res, f);
-    co_await f.close();
-    co_return {};
-}
-} // namespace co_async
-
-
-
-
-
-namespace co_async {
-String timePointToHTTPDate(std::chrono::system_clock::time_point tp) {
-    // format chrono time point into HTTP date format, e.g.:
-    // Tue, 30 Apr 2024 07:31:38 GMT
-    std::time_t time = std::chrono::system_clock::to_time_t(tp);
-    std::tm tm = *std::gmtime(&time);
-    std::ostringstream ss;
-    ss.imbue(std::locale::classic());
-    ss << std::put_time(&tm, "%a, %d %b %Y %H:%M:%S GMT");
-    return String{ss.str()};
-}
-
-Expected<std::chrono::system_clock::time_point>
-httpDateToTimePoint(String const &date) {
-    std::tm tm = {};
-    std::istringstream ss(date);
-    ss.imbue(std::locale::classic());
-    ss >> std::get_time(&tm, "%a, %d %b %Y %H:%M:%S GMT");
-    if (ss.fail()) [[unlikely]] {
-        return std::errc::invalid_argument;
-    }
-    std::time_t time = std::mktime(&tm);
-    return std::chrono::system_clock::from_time_t(time);
-}
-
-String httpDateNow() {
-    std::time_t time = std::time(nullptr);
-    std::tm tm = *std::gmtime(&time);
-    std::ostringstream ss;
-    ss.imbue(std::locale::classic());
-    ss << std::put_time(&tm, "%a, %d %b %Y %H:%M:%S GMT");
-    return String{ss.str()};
-}
-
-std::string_view getHTTPStatusName(int status) {
-    using namespace std::string_view_literals;
-    static constexpr std::pair<int, std::string_view> lut[] = {
-        {100, "Continue"sv},
-        {101, "Switching Protocols"sv},
-        {102, "Processing"sv},
-        {200, "OK"sv},
-        {201, "Created"sv},
-        {202, "Accepted"sv},
-        {203, "Non-Authoritative Information"sv},
-        {204, "No Content"sv},
-        {205, "Reset Content"sv},
-        {206, "Partial Content"sv},
-        {207, "Multi-Status"sv},
-        {208, "Already Reported"sv},
-        {226, "IM Used"sv},
-        {300, "Multiple Choices"sv},
-        {301, "Moved Permanently"sv},
-        {302, "Found"sv},
-        {303, "See Other"sv},
-        {304, "Not Modified"sv},
-        {305, "Use Proxy"sv},
-        {306, "Switch Proxy"sv},
-        {307, "Temporary Redirect"sv},
-        {308, "Permanent Redirect"sv},
-        {400, "Bad Request"sv},
-        {401, "Unauthorized"sv},
-        {402, "Payment Required"sv},
-        {403, "Forbidden"sv},
-        {404, "Not Found"sv},
-        {405, "Method Not Allowed"sv},
-        {406, "Not Acceptable"sv},
-        {407, "Proxy Authentication Required"sv},
-        {408, "Request Timeout"sv},
-        {409, "Conflict"sv},
-        {410, "Gone"sv},
-        {411, "Length Required"sv},
-        {412, "Precondition Failed"sv},
-        {413, "Payload Too Large"sv},
-        {414, "URI Too Long"sv},
-        {415, "Unsupported Media Type"sv},
-        {416, "Range Not Satisfiable"sv},
-        {417, "Expectation Failed"sv},
-        {418, "I'm a teapot"sv},
-        {421, "Misdirected Request"sv},
-        {422, "Unprocessable Entity"sv},
-        {423, "Locked"sv},
-        {424, "Failed Dependency"sv},
-        {426, "Upgrade Required"sv},
-        {428, "Precondition Required"sv},
-        {429, "Too Many Requests"sv},
-        {431, "Request Header Fields Too Large"sv},
-        {451, "Unavailable For Legal Reasons"sv},
-        {500, "Internal Server Error"sv},
-        {501, "Not Implemented"sv},
-        {502, "Bad Gateway"sv},
-        {503, "Service Unavailable"sv},
-        {504, "Gateway Timeout"sv},
-        {505, "HTTP Version Not Supported"sv},
-        {506, "Variant Also Negotiates"sv},
-        {507, "Insufficient Storage"sv},
-        {508, "Loop Detected"sv},
-        {510, "Not Extended"sv},
-        {511, "Network Authentication Required"sv},
-    };
-    if (status == 200) {
-        return "OK"sv;
-    }
-    auto it = std::lower_bound(
-        std::begin(lut), std::end(lut), status,
-        [](auto const &p, auto status) { return p.first < status; });
-    if (it == std::end(lut) || it->first != status) [[unlikely]] {
-        return "Unknown"sv;
-    } else {
-        return it->second;
-    }
-}
-
-String guessContentTypeByExtension(std::string_view ext,
-                                   char const *defaultType) {
-    using namespace std::string_view_literals;
-    if (ext == ".html"sv || ext == ".htm"sv) {
-        return String{"text/html;charset=utf-8"sv};
-    } else if (ext == ".css"sv) {
-        return String{"text/css;charset=utf-8"sv};
-    } else if (ext == ".js"sv) {
-        return String{"application/javascript;charset=utf-8"sv};
-    } else if (ext == ".txt"sv || ext == ".md"sv) {
-        return String{"text/plain;charset=utf-8"sv};
-    } else if (ext == ".json"sv) {
-        return String{"application/json"sv};
-    } else if (ext == ".png"sv) {
-        return String{"image/png"sv};
-    } else if (ext == ".jpg"sv || ext == ".jpeg"sv) {
-        return String{"image/jpeg"sv};
-    } else if (ext == ".gif"sv) {
-        return String{"image/gif"sv};
-    } else if (ext == ".xml"sv) {
-        return String{"application/xml"sv};
-    } else if (ext == ".pdf"sv) {
-        return String{"application/pdf"sv};
-    } else if (ext == ".mp4"sv) {
-        return String{"video/mp4"sv};
-    } else if (ext == ".mp3"sv) {
-        return String{"audio/mp3"sv};
-    } else if (ext == ".zip"sv) {
-        return String{"application/zip"sv};
-    } else if (ext == ".svg"sv) {
-        return String{"image/svg+xml"sv};
-    } else if (ext == ".wav"sv) {
-        return String{"audio/wav"sv};
-    } else if (ext == ".ogg"sv) {
-        return String{"audio/ogg"sv};
-    } else if (ext == ".mpg"sv || ext == ".mpeg"sv) {
-        return String{"video/mpeg"sv};
-    } else if (ext == ".webm"sv) {
-        return String{"video/webm"sv};
-    } else if (ext == ".ico"sv) {
-        return String{"image/x-icon"sv};
-    } else if (ext == ".rar"sv) {
-        return String{"application/x-rar-compressed"sv};
-    } else if (ext == ".7z"sv) {
-        return String{"application/x-7z-compressed"sv};
-    } else if (ext == ".tar"sv) {
-        return String{"application/x-tar"sv};
-    } else if (ext == ".gz"sv) {
-        return String{"application/gzip"sv};
-    } else if (ext == ".bz2"sv) {
-        return String{"application/x-bzip2"sv};
-    } else if (ext == ".xz"sv) {
-        return String{"application/x-xz"sv};
-    } else if (ext == ".zip"sv) {
-        return String{"application/zip"sv};
-    } else if (ext == ".tar.gz"sv || ext == ".tgz"sv) {
-        return String{"application/tar+gzip"sv};
-    } else if (ext == ".tar.bz2"sv || ext == ".tbz2"sv) {
-        return String{"application/tar+bzip2"sv};
-    } else if (ext == ".tar.xz"sv || ext == ".txz"sv) {
-        return String{"application/tar+xz"sv};
-    } else if (ext == ".doc"sv || ext == ".docx"sv) {
-        return String{"application/msword"sv};
-    } else if (ext == ".xls"sv || ext == ".xlsx"sv) {
-        return String{"application/vnd.ms-excel"sv};
-    } else if (ext == ".ppt"sv || ext == ".pptx"sv) {
-        return String{"application/vnd.ms-powerpoint"sv};
-    } else if (ext == ".csv"sv) {
-        return String{"text/csv;charset=utf-8"sv};
-    } else if (ext == ".rtf"sv) {
-        return String{"application/rtf"sv};
-    } else if (ext == ".exe"sv) {
-        return String{"application/x-msdownload"sv};
-    } else if (ext == ".msi"sv) {
-        return String{"application/x-msi"sv};
-    } else if (ext == ".bin"sv) {
-        return String{"application/octet-stream"sv};
-    } else {
-        return String{defaultType};
-    }
-}
-
-String capitalizeHTTPHeader(std::string_view key) {
-    // e.g.: user-agent -> User-Agent
-    String result(key);
-    if (!result.empty()) [[likely]] {
-        if ('a' <= result[0] && result[0] <= 'z') [[likely]] {
-            result[0] -= 'a' - 'A';
-        }
-        for (std::size_t i = 1; i < result.size(); ++i) {
-            if (result[i - 1] == '-' && 'a' <= result[i] && result[i] <= 'z')
-                [[likely]] {
-                result[i] -= 'a' - 'A';
-            }
-        }
-    }
-    return result;
-}
-} // namespace co_async
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -16860,6 +15739,384 @@ Task<Expected<>> HTTPServer::make_error_response(IO &io, int status) {
 
 
 
+
+
+
+
+namespace co_async {
+String HTTPServerUtils::html_encode(std::string_view str) {
+    String res;
+    res.reserve(str.size());
+    for (auto c: str) {
+        switch (c) {
+        case '&':  res.append("&amp;"); break;
+        case '"':  res.append("&quot;"); break;
+        case '\'': res.append("&apos;"); break;
+        case '<':  res.append("&lt;"); break;
+        case '>':  res.append("&gt;"); break;
+        default:   res.push_back(c);
+        }
+    }
+    return res;
+}
+
+Task<Expected<>> HTTPServerUtils::make_ok_response(HTTPServer::IO &io,
+                                                   std::string_view body,
+                                                   String contentType) {
+    HTTPResponse res{
+        .status = 200,
+        .headers =
+            {
+                {"content-type", std::move(contentType)},
+            },
+    };
+    co_await co_await io.response(res, body);
+    co_return {};
+}
+
+Task<Expected<>>
+HTTPServerUtils::make_response_from_directory(HTTPServer::IO &io,
+                                              std::filesystem::path path) {
+    String dirPath{path.generic_string()};
+    String content = "<h1>Files in " + dirPath + ":</h1>";
+    auto parentPath = path.parent_path().generic_string();
+    content +=
+        "<a href=\"/" + URI::url_encode_path(parentPath) + "\">..</a><br>";
+    auto dir = co_await co_await dir_open(path);
+    while (auto entry = co_await dir.next()) {
+        if (*entry == ".." || *entry == ".") {
+            continue;
+        }
+        content +=
+            "<a href=\"/" +
+            URI::url_encode_path(make_path(dirPath, *entry).generic_string()) +
+            "\">" + html_encode(*entry) + "</a><br>";
+    }
+    co_await co_await make_ok_response(io, content);
+    co_return {};
+}
+
+Task<Expected<>> HTTPServerUtils::make_error_response(HTTPServer::IO &io,
+                                                      int status) {
+    auto error = to_string(status) + ' ' + String(getHTTPStatusName(status));
+    HTTPResponse res{
+        .status = status,
+        .headers =
+            {
+                {"content-type", "text/html;charset=utf-8"},
+            },
+    };
+    co_await co_await io.response(
+        res, "<html><head><title>" + error +
+                 "</title></head><body><center><h1>" + error +
+                 "</h1></center><hr><center>co_async</center></body></html>");
+    co_return {};
+}
+
+Task<Expected<>> HTTPServerUtils::make_response_from_file_or_directory(
+    HTTPServer::IO &io, std::filesystem::path path) {
+    auto stat = co_await fs_stat(path, STATX_MODE);
+    if (!stat) [[unlikely]] {
+        co_return co_await make_error_response(io, 404);
+    }
+    if (!stat->is_readable()) [[unlikely]] {
+        co_return co_await make_error_response(io, 403);
+    }
+    if (stat->is_directory()) {
+        co_return co_await make_response_from_directory(io, std::move(path));
+    }
+    HTTPResponse res{
+        .status = 200,
+        .headers =
+            {
+                {"content-type",
+                 guessContentTypeByExtension(path.extension().string())},
+            },
+    };
+    auto f = co_await co_await file_open(path, OpenMode::Read);
+    co_await co_await io.response(res, f);
+    co_await f.close();
+    co_return {};
+}
+
+Task<Expected<>>
+HTTPServerUtils::make_response_from_path(HTTPServer::IO &io,
+                                         std::filesystem::path path) {
+    auto stat = co_await fs_stat(path, STATX_MODE);
+    if (!stat) [[unlikely]] {
+        co_return co_await make_error_response(io, 404);
+    }
+    if (!stat->is_readable()) [[unlikely]] {
+        co_return co_await make_error_response(io, 403);
+    }
+    if (stat->is_directory()) {
+        co_return co_await make_response_from_directory(io, path);
+    }
+    /* if (stat->is_executable()) { */
+    /*     co_return co_await make_response_from_cgi_script(io, path); */
+    /* } */
+    HTTPResponse res{
+        .status = 200,
+        .headers =
+            {
+                {"content-type",
+                 guessContentTypeByExtension(path.extension().string())},
+            },
+    };
+    auto f = co_await co_await file_open(path, OpenMode::Read);
+    co_await co_await io.response(res, f);
+    co_await f.close();
+    co_return {};
+}
+
+Task<Expected<>>
+HTTPServerUtils::make_response_from_file(HTTPServer::IO &io,
+                                         std::filesystem::path path) {
+    auto stat = co_await fs_stat(path, STATX_MODE);
+    if (!stat || stat->is_directory()) [[unlikely]] {
+        co_return co_await make_error_response(io, 404);
+    }
+    if (!stat->is_readable()) [[unlikely]] {
+        co_return co_await make_error_response(io, 403);
+    }
+    HTTPResponse res{
+        .status = 200,
+        .headers =
+            {
+                {"content-type",
+                 guessContentTypeByExtension(path.extension().string())},
+            },
+    };
+    auto f = co_await co_await file_open(path, OpenMode::Read);
+    co_await co_await io.response(res, f);
+    co_await f.close();
+    co_return {};
+}
+} // namespace co_async
+
+
+
+
+
+namespace co_async {
+String timePointToHTTPDate(std::chrono::system_clock::time_point tp) {
+    // format chrono time point into HTTP date format, e.g.:
+    // Tue, 30 Apr 2024 07:31:38 GMT
+    std::time_t time = std::chrono::system_clock::to_time_t(tp);
+    std::tm tm = *std::gmtime(&time);
+    std::ostringstream ss;
+    ss.imbue(std::locale::classic());
+    ss << std::put_time(&tm, "%a, %d %b %Y %H:%M:%S GMT");
+    return String{ss.str()};
+}
+
+Expected<std::chrono::system_clock::time_point>
+httpDateToTimePoint(String const &date) {
+    std::tm tm = {};
+    std::istringstream ss(date);
+    ss.imbue(std::locale::classic());
+    ss >> std::get_time(&tm, "%a, %d %b %Y %H:%M:%S GMT");
+    if (ss.fail()) [[unlikely]] {
+        return std::errc::invalid_argument;
+    }
+    std::time_t time = std::mktime(&tm);
+    return std::chrono::system_clock::from_time_t(time);
+}
+
+String httpDateNow() {
+    std::time_t time = std::time(nullptr);
+    std::tm tm = *std::gmtime(&time);
+    std::ostringstream ss;
+    ss.imbue(std::locale::classic());
+    ss << std::put_time(&tm, "%a, %d %b %Y %H:%M:%S GMT");
+    return String{ss.str()};
+}
+
+std::string_view getHTTPStatusName(int status) {
+    using namespace std::string_view_literals;
+    static constexpr std::pair<int, std::string_view> lut[] = {
+        {100, "Continue"sv},
+        {101, "Switching Protocols"sv},
+        {102, "Processing"sv},
+        {200, "OK"sv},
+        {201, "Created"sv},
+        {202, "Accepted"sv},
+        {203, "Non-Authoritative Information"sv},
+        {204, "No Content"sv},
+        {205, "Reset Content"sv},
+        {206, "Partial Content"sv},
+        {207, "Multi-Status"sv},
+        {208, "Already Reported"sv},
+        {226, "IM Used"sv},
+        {300, "Multiple Choices"sv},
+        {301, "Moved Permanently"sv},
+        {302, "Found"sv},
+        {303, "See Other"sv},
+        {304, "Not Modified"sv},
+        {305, "Use Proxy"sv},
+        {306, "Switch Proxy"sv},
+        {307, "Temporary Redirect"sv},
+        {308, "Permanent Redirect"sv},
+        {400, "Bad Request"sv},
+        {401, "Unauthorized"sv},
+        {402, "Payment Required"sv},
+        {403, "Forbidden"sv},
+        {404, "Not Found"sv},
+        {405, "Method Not Allowed"sv},
+        {406, "Not Acceptable"sv},
+        {407, "Proxy Authentication Required"sv},
+        {408, "Request Timeout"sv},
+        {409, "Conflict"sv},
+        {410, "Gone"sv},
+        {411, "Length Required"sv},
+        {412, "Precondition Failed"sv},
+        {413, "Payload Too Large"sv},
+        {414, "URI Too Long"sv},
+        {415, "Unsupported Media Type"sv},
+        {416, "Range Not Satisfiable"sv},
+        {417, "Expectation Failed"sv},
+        {418, "I'm a teapot"sv},
+        {421, "Misdirected Request"sv},
+        {422, "Unprocessable Entity"sv},
+        {423, "Locked"sv},
+        {424, "Failed Dependency"sv},
+        {426, "Upgrade Required"sv},
+        {428, "Precondition Required"sv},
+        {429, "Too Many Requests"sv},
+        {431, "Request Header Fields Too Large"sv},
+        {451, "Unavailable For Legal Reasons"sv},
+        {500, "Internal Server Error"sv},
+        {501, "Not Implemented"sv},
+        {502, "Bad Gateway"sv},
+        {503, "Service Unavailable"sv},
+        {504, "Gateway Timeout"sv},
+        {505, "HTTP Version Not Supported"sv},
+        {506, "Variant Also Negotiates"sv},
+        {507, "Insufficient Storage"sv},
+        {508, "Loop Detected"sv},
+        {510, "Not Extended"sv},
+        {511, "Network Authentication Required"sv},
+    };
+    if (status == 200) {
+        return "OK"sv;
+    }
+    auto it = std::lower_bound(
+        std::begin(lut), std::end(lut), status,
+        [](auto const &p, auto status) { return p.first < status; });
+    if (it == std::end(lut) || it->first != status) [[unlikely]] {
+        return "Unknown"sv;
+    } else {
+        return it->second;
+    }
+}
+
+String guessContentTypeByExtension(std::string_view ext,
+                                   char const *defaultType) {
+    using namespace std::string_view_literals;
+    if (ext == ".html"sv || ext == ".htm"sv) {
+        return String{"text/html;charset=utf-8"sv};
+    } else if (ext == ".css"sv) {
+        return String{"text/css;charset=utf-8"sv};
+    } else if (ext == ".js"sv) {
+        return String{"application/javascript;charset=utf-8"sv};
+    } else if (ext == ".txt"sv || ext == ".md"sv) {
+        return String{"text/plain;charset=utf-8"sv};
+    } else if (ext == ".json"sv) {
+        return String{"application/json"sv};
+    } else if (ext == ".png"sv) {
+        return String{"image/png"sv};
+    } else if (ext == ".jpg"sv || ext == ".jpeg"sv) {
+        return String{"image/jpeg"sv};
+    } else if (ext == ".gif"sv) {
+        return String{"image/gif"sv};
+    } else if (ext == ".xml"sv) {
+        return String{"application/xml"sv};
+    } else if (ext == ".pdf"sv) {
+        return String{"application/pdf"sv};
+    } else if (ext == ".mp4"sv) {
+        return String{"video/mp4"sv};
+    } else if (ext == ".mp3"sv) {
+        return String{"audio/mp3"sv};
+    } else if (ext == ".zip"sv) {
+        return String{"application/zip"sv};
+    } else if (ext == ".svg"sv) {
+        return String{"image/svg+xml"sv};
+    } else if (ext == ".wav"sv) {
+        return String{"audio/wav"sv};
+    } else if (ext == ".ogg"sv) {
+        return String{"audio/ogg"sv};
+    } else if (ext == ".mpg"sv || ext == ".mpeg"sv) {
+        return String{"video/mpeg"sv};
+    } else if (ext == ".webm"sv) {
+        return String{"video/webm"sv};
+    } else if (ext == ".ico"sv) {
+        return String{"image/x-icon"sv};
+    } else if (ext == ".rar"sv) {
+        return String{"application/x-rar-compressed"sv};
+    } else if (ext == ".7z"sv) {
+        return String{"application/x-7z-compressed"sv};
+    } else if (ext == ".tar"sv) {
+        return String{"application/x-tar"sv};
+    } else if (ext == ".gz"sv) {
+        return String{"application/gzip"sv};
+    } else if (ext == ".bz2"sv) {
+        return String{"application/x-bzip2"sv};
+    } else if (ext == ".xz"sv) {
+        return String{"application/x-xz"sv};
+    } else if (ext == ".zip"sv) {
+        return String{"application/zip"sv};
+    } else if (ext == ".tar.gz"sv || ext == ".tgz"sv) {
+        return String{"application/tar+gzip"sv};
+    } else if (ext == ".tar.bz2"sv || ext == ".tbz2"sv) {
+        return String{"application/tar+bzip2"sv};
+    } else if (ext == ".tar.xz"sv || ext == ".txz"sv) {
+        return String{"application/tar+xz"sv};
+    } else if (ext == ".doc"sv || ext == ".docx"sv) {
+        return String{"application/msword"sv};
+    } else if (ext == ".xls"sv || ext == ".xlsx"sv) {
+        return String{"application/vnd.ms-excel"sv};
+    } else if (ext == ".ppt"sv || ext == ".pptx"sv) {
+        return String{"application/vnd.ms-powerpoint"sv};
+    } else if (ext == ".csv"sv) {
+        return String{"text/csv;charset=utf-8"sv};
+    } else if (ext == ".rtf"sv) {
+        return String{"application/rtf"sv};
+    } else if (ext == ".exe"sv) {
+        return String{"application/x-msdownload"sv};
+    } else if (ext == ".msi"sv) {
+        return String{"application/x-msi"sv};
+    } else if (ext == ".bin"sv) {
+        return String{"application/octet-stream"sv};
+    } else {
+        return String{defaultType};
+    }
+}
+
+String capitalizeHTTPHeader(std::string_view key) {
+    // e.g.: user-agent -> User-Agent
+    String result(key);
+    if (!result.empty()) [[likely]] {
+        if ('a' <= result[0] && result[0] <= 'z') [[likely]] {
+            result[0] -= 'a' - 'A';
+        }
+        for (std::size_t i = 1; i < result.size(); ++i) {
+            if (result[i - 1] == '-' && 'a' <= result[i] && result[i] <= 'z')
+                [[likely]] {
+                result[i] -= 'a' - 'A';
+            }
+        }
+    }
+    return result;
+}
+} // namespace co_async
+
+
+
+
+
+
+
+
 namespace co_async {
 Task<Expected<SocketHandle>>
 socket_proxy_connect(char const *host, int port, std::string_view proxy,
@@ -16924,6 +16181,914 @@ socket_proxy_connect(char const *host, int port, std::string_view proxy,
         }
         co_return sock;
     }
+}
+} // namespace co_async
+
+
+
+
+
+namespace co_async {
+namespace {
+std::uint8_t fromHex(char c) {
+    if ('0' <= c && c <= '9') {
+        return static_cast<std::uint8_t>(c - '0');
+    } else if ('A' <= c && c <= 'F') {
+        return static_cast<std::uint8_t>(c - 'A' + 10);
+    } else [[unlikely]] {
+        return 0;
+    }
+}
+
+bool isCharUrlSafe(char c) {
+    if ('0' <= c && c <= '9') {
+        return true;
+    }
+    if ('a' <= c && c <= 'z') {
+        return true;
+    }
+    if ('A' <= c && c <= 'Z') {
+        return true;
+    }
+    if (c == '-' || c == '_' || c == '.') {
+        return true;
+    }
+    return false;
+}
+} // namespace
+
+void URI::url_decode(String &r, std::string_view s) {
+    std::size_t b = 0;
+    while (true) {
+        auto i = s.find('%', b);
+        if (i == std::string_view::npos || i + 3 > s.size()) {
+            r.append(s.data() + b, s.data() + s.size());
+            break;
+        }
+        r.append(s.data() + b, s.data() + i);
+        char c1 = s[i + 1];
+        char c2 = s[i + 2];
+        r.push_back(static_cast<char>((fromHex(c1) << 4) | fromHex(c2)));
+        b = i + 3;
+    }
+}
+
+String URI::url_decode(std::string_view s) {
+    String r;
+    r.reserve(s.size());
+    url_decode(r, s);
+    return r;
+}
+
+void URI::url_encode(String &r, std::string_view s) {
+    static constexpr char lut[] = "0123456789ABCDEF";
+    for (char c: s) {
+        if (isCharUrlSafe(c)) {
+            r.push_back(c);
+        } else {
+            r.push_back('%');
+            r.push_back(lut[static_cast<std::uint8_t>(c) >> 4]);
+            r.push_back(lut[static_cast<std::uint8_t>(c) & 0xF]);
+        }
+    }
+}
+
+String URI::url_encode(std::string_view s) {
+    String r;
+    r.reserve(s.size());
+    url_encode(r, s);
+    return r;
+}
+
+void URI::url_encode_path(String &r, std::string_view s) {
+    static constexpr char lut[] = "0123456789ABCDEF";
+    for (char c: s) {
+        if (isCharUrlSafe(c) || c == '/') {
+            r.push_back(c);
+        } else {
+            r.push_back('%');
+            r.push_back(lut[static_cast<std::uint8_t>(c) >> 4]);
+            r.push_back(lut[static_cast<std::uint8_t>(c) & 0xF]);
+        }
+    }
+}
+
+String URI::url_encode_path(std::string_view s) {
+    String r;
+    r.reserve(s.size());
+    url_encode_path(r, s);
+    return r;
+}
+
+URI URI::parse(std::string_view uri) {
+    auto path = uri;
+    URIParams params;
+    if (auto i = uri.find('?'); i != std::string_view::npos) {
+        path = uri.substr(0, i);
+        do {
+            uri.remove_prefix(i + 1);
+            i = uri.find('&');
+            auto pair = uri.substr(0, i);
+            auto m = pair.find('=');
+            if (m != std::string_view::npos) {
+                auto k = pair.substr(0, m);
+                auto v = pair.substr(m + 1);
+                params.insert_or_assign(String(k), url_decode(v));
+            }
+        } while (i != std::string_view::npos);
+    }
+    String spath(path);
+    if (spath.empty() || spath.front() != '/') [[unlikely]] {
+        spath.insert(spath.begin(), '/');
+    }
+    return URI{spath, std::move(params)};
+}
+
+void URI::dump(String &r) const {
+    r.append(path);
+    char queryChar = '?';
+    for (auto &[k, v]: params) {
+        r.push_back(queryChar);
+        url_encode(r, k);
+        r.push_back('=');
+        url_encode(r, v);
+        queryChar = '&';
+    }
+}
+
+String URI::dump() const {
+    String r;
+    dump(r);
+    return r;
+}
+} // namespace co_async
+
+
+
+
+
+#include <fcntl.h>
+#include <liburing.h>
+#include <sched.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+namespace co_async {
+void PlatformIOContext::schedSetThreadAffinity(size_t cpu) {
+    cpu_set_t cpu_set;
+    CPU_ZERO(&cpu_set);
+    CPU_SET(cpu, &cpu_set);
+    throwingErrorErrno(
+        sched_setaffinity(gettid(), sizeof(cpu_set_t), &cpu_set));
+}
+
+PlatformIOContext::IOUringProbe::IOUringProbe() {
+    mRing = nullptr;
+    // mProbe = io_uring_get_probe();
+    mProbe = nullptr;
+    if (!mProbe) {
+        mRing = new struct io_uring;
+        throwingError(io_uring_queue_init(8, mRing, 0));
+    }
+}
+
+PlatformIOContext::IOUringProbe::~IOUringProbe() {
+    if (mProbe) {
+        io_uring_free_probe(mProbe);
+    }
+    if (mRing) {
+        io_uring_queue_exit(mRing);
+        delete mRing;
+    }
+}
+
+bool PlatformIOContext::IOUringProbe::isSupported(int op) noexcept {
+    if (mProbe) {
+        return io_uring_opcode_supported(mProbe, op);
+    }
+    if (mRing) {
+        struct io_uring_sqe *sqe = io_uring_get_sqe(mRing);
+        io_uring_prep_rw(op, sqe, -1, nullptr, 0, 0);
+        struct io_uring_cqe *cqe;
+        throwingError(io_uring_submit(mRing));
+        throwingError(io_uring_wait_cqe(mRing, &cqe));
+        int res = cqe->res;
+        io_uring_cqe_seen(mRing, cqe);
+        return res != ENOSYS;
+    }
+    return false;
+}
+
+void PlatformIOContext::IOUringProbe::dumpDiagnostics() {
+    static char const *ops[IORING_OP_LAST + 1] = {
+        "IORING_OP_NOP",
+        "IORING_OP_READV",
+        "IORING_OP_WRITEV",
+        "IORING_OP_FSYNC",
+        "IORING_OP_READ_FIXED",
+        "IORING_OP_WRITE_FIXED",
+        "IORING_OP_POLL_ADD",
+        "IORING_OP_POLL_REMOVE",
+        "IORING_OP_SYNC_FILE_RANGE",
+        "IORING_OP_SENDMSG",
+        "IORING_OP_RECVMSG",
+        "IORING_OP_TIMEOUT",
+        "IORING_OP_TIMEOUT_REMOVE",
+        "IORING_OP_ACCEPT",
+        "IORING_OP_ASYNC_CANCEL",
+        "IORING_OP_LINK_TIMEOUT",
+        "IORING_OP_CONNECT",
+        "IORING_OP_FALLOCATE",
+        "IORING_OP_OPENAT",
+        "IORING_OP_CLOSE",
+        "IORING_OP_FILES_UPDATE",
+        "IORING_OP_STATX",
+        "IORING_OP_READ",
+        "IORING_OP_WRITE",
+        "IORING_OP_FADVISE",
+        "IORING_OP_MADVISE",
+        "IORING_OP_SEND",
+        "IORING_OP_RECV",
+        "IORING_OP_OPENAT2",
+        "IORING_OP_EPOLL_CTL",
+        "IORING_OP_SPLICE",
+        "IORING_OP_PROVIDE_BUFFERS",
+        "IORING_OP_REMOVE_BUFFERS",
+        "IORING_OP_TEE",
+        "IORING_OP_SHUTDOWN",
+        "IORING_OP_RENAMEAT",
+        "IORING_OP_UNLINKAT",
+        "IORING_OP_MKDIRAT",
+        "IORING_OP_SYMLINKAT",
+        "IORING_OP_LINKAT",
+        "IORING_OP_MSG_RING",
+        "IORING_OP_FSETXATTR",
+        "IORING_OP_SETXATTR",
+        "IORING_OP_FGETXATTR",
+        "IORING_OP_GETXATTR",
+        "IORING_OP_SOCKET",
+        "IORING_OP_URING_CMD",
+        "IORING_OP_SEND_ZC",
+        "IORING_OP_SENDMSG_ZC",
+        "IORING_OP_READ_MULTISHOT",
+        "IORING_OP_WAITID",
+        "IORING_OP_FUTEX_WAIT",
+        "IORING_OP_FUTEX_WAKE",
+        "IORING_OP_FUTEX_WAITV",
+        "IORING_OP_FIXED_FD_INSTALL",
+        "IORING_OP_FTRUNCATE",
+        "IORING_OP_LAST",
+    };
+    for (int op = IORING_OP_NOP; op < IORING_OP_LAST; ++op) {
+        bool ok = isSupported(op);
+        std::cerr << "opcode " << ops[op] << (ok ? "" : " not") << " supported"
+                  << '\n';
+    }
+}
+
+PlatformIOContext::PlatformIOContext() noexcept {
+    mRing.ring_fd = -1;
+}
+
+void PlatformIOContext::setup(std::size_t entries) {
+    unsigned int flags = 0;
+#if CO_ASYNC_DIRECT
+    flags |= IORING_SETUP_IOPOLL;
+#endif
+    throwingError(
+        io_uring_queue_init(static_cast<unsigned int>(entries), &mRing, flags));
+}
+
+void PlatformIOContext::reserveBuffers(std::size_t nbufs) {
+    auto oldBuf = std::move(mBuffers);
+    mBuffers = std::make_unique<struct iovec[]>(nbufs);
+    if (mCapBufs) {
+        throwingError(io_uring_unregister_buffers(&mRing));
+    }
+    mCapBufs = static_cast<unsigned int>(nbufs);
+    std::memcpy(mBuffers.get(), oldBuf.get(), sizeof(struct iovec) * mNumBufs);
+    throwingError(io_uring_register_buffers_sparse(
+        &mRing, static_cast<unsigned int>(nbufs)));
+    std::vector<__u64> tags(mNumBufs, 0);
+    throwingError(io_uring_register_buffers_update_tag(
+        &mRing, 0, mBuffers.get(), tags.data(),
+        static_cast<unsigned int>(mNumBufs)));
+}
+
+std::size_t
+PlatformIOContext::addBuffers(std::span<std::span<char> const> bufs) {
+    if (mNumBufs >= mCapBufs) {
+        reserveBuffers(mCapBufs * 2 + 1);
+    }
+    auto outP = mBuffers.get() + mNumBufs;
+    for (auto const &buf: bufs) {
+        struct iovec iov;
+        iov.iov_base = buf.data();
+        iov.iov_len = buf.size();
+        *outP++ = iov;
+    }
+    std::vector<__u64> tags(bufs.size(), 0);
+    throwingError(io_uring_register_buffers_update_tag(
+        &mRing, mNumBufs, mBuffers.get() + mNumBufs, tags.data(),
+        static_cast<unsigned int>(bufs.size())));
+    size_t ret = mNumBufs;
+    mNumBufs += static_cast<unsigned int>(bufs.size());
+    return ret;
+}
+
+void PlatformIOContext::reserveFiles(std::size_t nfiles) {
+    auto oldBuf = std::move(mFiles);
+    mFiles = std::make_unique<int[]>(nfiles);
+    if (mCapFiles) {
+        throwingError(io_uring_unregister_files(&mRing));
+    }
+    mCapFiles = static_cast<unsigned int>(nfiles);
+    std::memcpy(mFiles.get(), oldBuf.get(), sizeof(int) * mNumFiles);
+    throwingError(io_uring_register_files_sparse(
+        &mRing, static_cast<unsigned int>(nfiles)));
+    std::vector<__u64> tags(mNumFiles, 0);
+    throwingError(io_uring_register_files_update_tag(&mRing, 0, mFiles.get(),
+                                                     tags.data(), mNumFiles));
+}
+
+std::size_t PlatformIOContext::addFiles(std::span<int const> files) {
+    if (mNumFiles >= mCapFiles) {
+        reserveFiles(mCapFiles * 2 + 1);
+    }
+    auto outP = mFiles.get() + mNumFiles;
+    for (auto const &file: files) {
+        *outP++ = file;
+    }
+    std::vector<__u64> tags(files.size(), 0);
+    throwingError(io_uring_register_files_update_tag(
+        &mRing, mNumFiles, mFiles.get() + mNumFiles, tags.data(),
+        static_cast<unsigned int>(files.size())));
+    size_t ret = mNumFiles;
+    mNumFiles += static_cast<unsigned int>(files.size());
+    return ret;
+}
+
+PlatformIOContext::~PlatformIOContext() {
+    if (mRing.ring_fd != -1) {
+        io_uring_queue_exit(&mRing);
+    }
+}
+
+thread_local PlatformIOContext *PlatformIOContext::instance;
+
+bool PlatformIOContext::waitEventsFor(
+    std::optional<std::chrono::steady_clock::duration> timeout) {
+    // debug(), "wait", this, mNumSqesPending;
+    struct io_uring_cqe *cqe;
+    struct __kernel_timespec ts, *tsp;
+    if (timeout) {
+        tsp = &(ts = durationToKernelTimespec(*timeout));
+    } else {
+        tsp = nullptr;
+    }
+    int res = io_uring_submit_and_wait_timeout(&mRing, &cqe, 1, tsp, nullptr);
+    if (res == -ETIME) {
+        return false;
+    } else if (res < 0) [[unlikely]] {
+        if (res == -EINTR) {
+            return false;
+        }
+        throw std::system_error(-res, std::system_category());
+    }
+    unsigned head, numGot = 0;
+    std::vector<std::coroutine_handle<>> tasks;
+    io_uring_for_each_cqe(&mRing, head, cqe) {
+#if CO_ASYNC_INVALFIX
+        if (cqe->user_data == LIBURING_UDATA_TIMEOUT) [[unlikely]] {
+            ++numGot;
+            continue;
+        }
+#endif
+        auto *op = reinterpret_cast<UringOp *>(cqe->user_data);
+        op->mRes = cqe->res;
+        tasks.push_back(op->mPrevious);
+        ++numGot;
+    }
+    io_uring_cq_advance(&mRing, numGot);
+    mNumSqesPending -= static_cast<std::size_t>(numGot);
+    for (auto const &task: tasks) {
+#if CO_ASYNC_DEBUG
+        if (!task) [[likely]] {
+            std::cerr << "null coroutine pushed into task queue\n";
+        }
+        if (task.done()) [[likely]] {
+            std::cerr << "done coroutine pushed into task queue\n";
+        }
+#endif
+        task.resume();
+    }
+    return true;
+}
+} // namespace co_async
+
+#include <arpa/inet.h>
+
+
+
+
+
+
+
+
+#include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/un.h>
+#include <unistd.h>
+
+namespace co_async {
+std::error_category const &getAddrInfoCategory() {
+    static struct : std::error_category {
+        char const *name() const noexcept override {
+            return "getaddrinfo";
+        }
+
+        std::string message(int e) const override {
+            return gai_strerror(e);
+        }
+    } instance;
+
+    return instance;
+}
+
+// Expected<IpAddress> IpAddress::fromString(char const *host) {
+//     struct in_addr addr = {};
+//     struct in6_addr addr6 = {};
+//     if (1 == inet_pton(AF_INET, host, &addr)) {
+//         return IpAddress(addr);
+//     }
+//     if (1 == inet_pton(AF_INET6, host, &addr6)) {
+//         return IpAddress(addr6);
+//     }
+//     // gethostbyname is deprecated, let's use getaddrinfo instead:
+//     struct addrinfo hints = {};
+//     hints.ai_family = AF_UNSPEC;
+//     hints.ai_socktype = SOCK_STREAM;
+//     struct addrinfo *result;
+//     int err = getaddrinfo(host, nullptr, &hints, &result);
+//     if (err) [[unlikely]] {
+// #if CO_ASYNC_DEBUG
+//         std::cerr << host << ": " << gai_strerror(err) << '\n';
+// #endif
+//         return std::error_code(err, getAddrInfoCategory());
+//     }
+//     Finally fin = [&] {
+//         freeaddrinfo(result);
+//     };
+//     for (struct addrinfo *rp = result; rp != nullptr; rp = rp->ai_next) {
+//         if (rp->ai_family == AF_INET) {
+//             std::memcpy(&addr, &reinterpret_cast<struct sockaddr_in
+//             *>(rp->ai_addr)->sin_addr,
+//                         sizeof(in_addr));
+//             return IpAddress(addr);
+//         } else if (rp->ai_family == AF_INET6) {
+//             std::memcpy(&addr6,
+//                         &reinterpret_cast<struct sockaddr_in6
+//                         *>(rp->ai_addr)->sin6_addr, sizeof(in6_addr));
+//             return IpAddress(addr6);
+//         }
+//     }
+//     [[unlikely]] {
+// #if CO_ASYNC_DEBUG
+//         std::cerr << host << ": no matching host address with ipv4 or
+//         ipv6\n";
+// #endif
+//         return std::errc::bad_address;
+//     }
+// }
+//
+// String IpAddress::toString() const {
+//     if (mAddr.index() == 1) {
+//         char buf[INET6_ADDRSTRLEN + 1] = {};
+//         inet_ntop(AF_INET6, &std::get<1>(mAddr), buf, sizeof(buf));
+//         return buf;
+//     } else if (mAddr.index() == 0) {
+//         char buf[INET_ADDRSTRLEN + 1] = {};
+//         inet_ntop(AF_INET, &std::get<0>(mAddr), buf, sizeof(buf));
+//         return buf;
+//     } else {
+//         return "[invalid ip address or domain name]";
+//     }
+// }
+
+auto AddressResolver::resolve_all() -> Expected<ResolveResult> {
+    // gethostbyname is deprecated, let's use getaddrinfo instead:
+    if (m_host.empty()) [[unlikely]] {
+        return std::errc::invalid_argument;
+    }
+    struct addrinfo *result;
+    int err = getaddrinfo(m_host.c_str(),
+                          m_service.empty() ? nullptr : m_service.c_str(),
+                          &m_hints, &result);
+    if (err) [[unlikely]] {
+#if CO_ASYNC_DEBUG
+        std::cerr << m_host << ": " << gai_strerror(err) << '\n';
+#endif
+        return std::error_code(err, getAddrInfoCategory());
+    }
+    Finally fin = [&] {
+        freeaddrinfo(result);
+    };
+    ResolveResult res;
+    for (struct addrinfo *rp = result; rp != nullptr; rp = rp->ai_next) {
+        res.addrs
+            .emplace_back(rp->ai_addr, rp->ai_addrlen, rp->ai_family,
+                          rp->ai_socktype, rp->ai_protocol)
+            .trySetPort(m_port);
+    }
+    if (res.addrs.empty()) [[unlikely]] {
+#if CO_ASYNC_DEBUG
+        std::cerr << m_host << ": no matching host address\n";
+#endif
+        return std::errc::bad_address;
+    }
+    res.service = std::move(m_service);
+    return res;
+}
+
+Expected<SocketAddress> AddressResolver::resolve_one() {
+    auto res = resolve_all();
+    if (res.has_error()) [[unlikely]] {
+        return res.error();
+    }
+    return res->addrs.front();
+}
+
+Expected<SocketAddress> AddressResolver::resolve_one(std::string &service) {
+    auto res = resolve_all();
+    if (res.has_error()) [[unlikely]] {
+        return res.error();
+    }
+    service = std::move(res->service);
+    return res->addrs.front();
+}
+
+SocketAddress::SocketAddress(struct sockaddr const *addr, socklen_t addrLen,
+                             sa_family_t family, int sockType, int protocol)
+    : mSockType(sockType),
+      mProtocol(protocol) {
+    std::memcpy(&mAddr, addr, addrLen);
+    mAddr.ss_family = family;
+    mAddrLen = addrLen;
+}
+
+std::string SocketAddress::host() const {
+    if (family() == AF_INET) {
+        auto &sin =
+            reinterpret_cast<struct sockaddr_in const &>(mAddr).sin_addr;
+        char buf[INET_ADDRSTRLEN] = {};
+        inet_ntop(family(), &sin, buf, sizeof(buf));
+        return buf;
+    } else if (family() == AF_INET6) {
+        auto &sin6 =
+            reinterpret_cast<struct sockaddr_in6 const &>(mAddr).sin6_addr;
+        char buf[INET6_ADDRSTRLEN] = {};
+        inet_ntop(AF_INET6, &sin6, buf, sizeof(buf));
+        return buf;
+    } else [[unlikely]] {
+        throw std::runtime_error("address family not ipv4 or ipv6");
+    }
+}
+
+int SocketAddress::port() const {
+    if (family() == AF_INET) {
+        auto port =
+            reinterpret_cast<struct sockaddr_in const &>(mAddr).sin_port;
+        return ntohs(port);
+    } else if (family() == AF_INET6) {
+        auto port =
+            reinterpret_cast<struct sockaddr_in6 const &>(mAddr).sin6_port;
+        return ntohs(port);
+    } else [[unlikely]] {
+        throw std::runtime_error("address family not ipv4 or ipv6");
+    }
+}
+
+void SocketAddress::trySetPort(int port) {
+    if (family() == AF_INET) {
+        reinterpret_cast<struct sockaddr_in &>(mAddr).sin_port =
+            htons(static_cast<uint16_t>(port));
+    } else if (family() == AF_INET6) {
+        reinterpret_cast<struct sockaddr_in6 &>(mAddr).sin6_port =
+            htons(static_cast<uint16_t>(port));
+    }
+}
+
+String SocketAddress::toString() const {
+    // host() 是 std::string，to_string() 返回 String；CO_ASYNC_ALLOC 打开时
+    // 后者是 std::pmr::string，两者不能直接 operator+。
+    return String(host()) + ':' + to_string(port());
+}
+
+// void SocketAddress::initFromHostPort(struct in_addr const &host, int port) {
+//     struct sockaddr_in saddr = {};
+//     saddr.sin_family = AF_INET;
+//     std::memcpy(&saddr.sin_addr, &host, sizeof(saddr.sin_addr));
+//     saddr.sin_port = htons(static_cast<uint16_t>(port));
+//     std::memcpy(&mAddrIpv4, &saddr, sizeof(saddr));
+//     mAddrLen = sizeof(saddr);
+// }
+//
+// void SocketAddress::initFromHostPort(struct in6_addr const &host, int port) {
+//     struct sockaddr_in6 saddr = {};
+//     saddr.sin6_family = AF_INET6;
+//     std::memcpy(&saddr.sin6_addr, &host, sizeof(saddr.sin6_addr));
+//     saddr.sin6_port = htons(static_cast<uint16_t>(port));
+//     std::memcpy(&mAddrIpv6, &saddr, sizeof(saddr));
+//     mAddrLen = sizeof(saddr);
+// }
+
+SocketAddress get_socket_address(SocketHandle &sock) {
+    SocketAddress sa;
+    sa.mAddrLen = sizeof(sa.mAddr);
+    throwingErrorErrno(getsockname(
+        sock.fileNo(), reinterpret_cast<struct sockaddr *>(&sa.mAddr),
+        &sa.mAddrLen));
+    return sa;
+}
+
+SocketAddress get_socket_peer_address(SocketHandle &sock) {
+    SocketAddress sa;
+    sa.mAddrLen = sizeof(sa.mAddr);
+    throwingErrorErrno(getpeername(
+        sock.fileNo(), reinterpret_cast<struct sockaddr *>(&sa.mAddr),
+        &sa.mAddrLen));
+    return sa;
+}
+
+Task<Expected<SocketHandle>> createSocket(int family, int type, int protocol) {
+    int fd = co_await expectError(
+                 co_await UringOp().prep_socket(family, type, protocol, 0))
+#if CO_ASYNC_INVALFIX
+                 .or_else(std::errc::invalid_argument,
+                           [&] { return socket(family, type, protocol); })
+#endif
+        ;
+    SocketHandle sock(fd);
+    co_return sock;
+}
+
+Task<Expected<SocketHandle>> socket_connect(SocketAddress const &addr) {
+    SocketHandle sock = co_await co_await createSocket(
+        addr.family(), addr.socktype(), addr.protocol());
+    co_await expectError(co_await UringOp().prep_connect(
+        sock.fileNo(), reinterpret_cast<const struct sockaddr *>(&addr.mAddr),
+        addr.mAddrLen))
+#if CO_ASYNC_INVALFIX
+                 .or_else(std::errc::invalid_argument, [&] { return connect(sock.fileNo(),
+        reinterpret_cast<const struct sockaddr *>(&addr.mAddr), addr.mAddrLen); })
+#endif
+        ;
+    co_return sock;
+}
+
+Task<Expected<SocketHandle>>
+socket_connect(SocketAddress const &addr,
+               std::chrono::steady_clock::duration timeout) {
+    SocketHandle sock = co_await co_await createSocket(
+        addr.family(), addr.socktype(), addr.protocol());
+    auto ts = durationToKernelTimespec(timeout);
+    co_await expectError(co_await UringOp::link_ops(
+        UringOp().prep_connect(
+            sock.fileNo(),
+            reinterpret_cast<const struct sockaddr *>(&addr.mAddr),
+            addr.mAddrLen),
+        UringOp().prep_link_timeout(&ts, IORING_TIMEOUT_BOOTTIME)))
+#if CO_ASYNC_INVALFIX
+                 .or_else(std::errc::invalid_argument, [&] { return connect(sock.fileNo(),
+        reinterpret_cast<const struct sockaddr *>(&addr.mAddr), addr.mAddrLen); })
+#endif
+        ;
+    co_return sock;
+}
+
+Task<Expected<SocketHandle>> socket_connect(SocketAddress const &addr,
+                                            CancelToken cancel) {
+    SocketHandle sock =
+        co_await co_await createSocket(addr.family(), SOCK_STREAM, 0);
+    if (cancel.is_canceled()) [[unlikely]] {
+        co_return std::errc::operation_canceled;
+    }
+    co_await expectError(
+        co_await UringOp()
+            .prep_connect(
+                sock.fileNo(),
+                reinterpret_cast<const struct sockaddr *>(&addr.mAddr),
+                addr.mAddrLen)
+            .cancelGuard(cancel))
+#if CO_ASYNC_INVALFIX
+                 .or_else(std::errc::invalid_argument, [&] { return connect(sock.fileNo(),
+        reinterpret_cast<const struct sockaddr *>(&addr.mAddr), addr.mAddrLen); })
+#endif
+        ;
+    co_return sock;
+}
+
+Task<Expected<SocketListener>> listener_bind(SocketAddress const &addr,
+                                             int backlog) {
+    SocketHandle sock =
+        co_await co_await createSocket(addr.family(), SOCK_STREAM, 0);
+    co_await socketSetOption(sock, SOL_SOCKET, SO_REUSEADDR, 1);
+    co_await socketSetOption(sock, SOL_SOCKET, SO_REUSEPORT, 1);
+    /* co_await socketSetOption(sock, IPPROTO_TCP, TCP_CORK, 0); */
+    /* co_await socketSetOption(sock, IPPROTO_TCP, TCP_NODELAY, 1); */
+    /* co_await socketSetOption(sock, SOL_SOCKET, SO_KEEPALIVE, 1); */
+    SocketListener serv(sock.releaseFile());
+    co_await expectError(bind(
+        serv.fileNo(), reinterpret_cast<struct sockaddr const *>(&addr.mAddr),
+        addr.mAddrLen));
+    co_await expectError(listen(serv.fileNo(), backlog));
+    co_return serv;
+}
+
+Task<Expected<SocketHandle>> listener_accept(SocketListener &listener) {
+    int fd = co_await expectError(
+        co_await UringOp().prep_accept(listener.fileNo(), nullptr, nullptr, 0));
+    SocketHandle sock(fd);
+    co_return sock;
+}
+
+Task<Expected<SocketHandle>> listener_accept(SocketListener &listener,
+                                             CancelToken cancel) {
+    int fd = co_await expectError(
+        co_await UringOp()
+            .prep_accept(listener.fileNo(), nullptr, nullptr, 0)
+            .cancelGuard(cancel));
+    SocketHandle sock(fd);
+    co_return sock;
+}
+
+Task<Expected<SocketHandle>> listener_accept(SocketListener &listener,
+                                             SocketAddress &peerAddr) {
+    int fd = co_await expectError(co_await UringOp().prep_accept(
+        listener.fileNo(), reinterpret_cast<struct sockaddr *>(&peerAddr.mAddr),
+        &peerAddr.mAddrLen, 0))
+#if CO_ASYNC_INVALFIX
+        .or_else(std::errc::invalid_argument, [&] { return expectError(accept4(
+                         listener.fileNo(), reinterpret_cast<struct sockaddr *>(&peerAddr.mAddr),
+                         &peerAddr.mAddrLen, 0)); })
+#endif
+        ;
+    SocketHandle sock(fd);
+    co_return sock;
+}
+
+Task<Expected<SocketHandle>> listener_accept(SocketListener &listener,
+                                             SocketAddress &peerAddr,
+                                             CancelToken cancel) {
+    int fd = co_await expectError(
+        co_await UringOp()
+            .prep_accept(listener.fileNo(),
+                         reinterpret_cast<struct sockaddr *>(&peerAddr.mAddr),
+                         &peerAddr.mAddrLen, 0)
+            .cancelGuard(cancel))
+#if CO_ASYNC_INVALFIX
+        .or_else(std::errc::invalid_argument, [&] { return expectError(accept4(
+                         listener.fileNo(), reinterpret_cast<struct sockaddr *>(&peerAddr.mAddr),
+                         &peerAddr.mAddrLen, 0)); })
+#endif
+        ;
+    SocketHandle sock(fd);
+    co_return sock;
+}
+
+Task<Expected<std::size_t>> socket_write(SocketHandle &sock,
+                                         std::span<char const> buf) {
+    co_return static_cast<std::size_t>(co_await expectError(
+        co_await UringOp().prep_send(sock.fileNo(), buf, 0))
+#if CO_ASYNC_INVALFIX
+        .or_else(std::errc::invalid_argument, [&] { return expectError(send(sock.fileNo(), buf.data(), buf.size(), 0)); })
+#endif
+                                       );
+}
+
+Task<Expected<std::size_t>> socket_write_zc(SocketHandle &sock,
+                                            std::span<char const> buf) {
+    co_return static_cast<std::size_t>(co_await expectError(
+        co_await UringOp().prep_send_zc(sock.fileNo(), buf, 0, 0))
+#if CO_ASYNC_INVALFIX
+        .or_else(std::errc::invalid_argument, [&] { return expectError(send(sock.fileNo(), buf.data(), buf.size(), 0)); })
+#endif
+                                       );
+}
+
+Task<Expected<std::size_t>> socket_read(SocketHandle &sock,
+                                        std::span<char> buf) {
+    co_return static_cast<std::size_t>(co_await expectError(
+        co_await UringOp().prep_recv(sock.fileNo(), buf, 0))
+#if CO_ASYNC_INVALFIX
+        .or_else(std::errc::invalid_argument, [&] { return expectError(recv(sock.fileNo(), buf.data(), buf.size(), 0)); })
+#endif
+        );
+}
+
+Task<Expected<std::size_t>> socket_write(SocketHandle &sock,
+                                         std::span<char const> buf,
+                                         CancelToken cancel) {
+    co_return static_cast<std::size_t>(
+        co_await expectError(co_await UringOp()
+                                 .prep_send(sock.fileNo(), buf, 0)
+                                 .cancelGuard(cancel))
+#if CO_ASYNC_INVALFIX
+        .or_else(std::errc::invalid_argument, [&] { return expectError(send(sock.fileNo(), buf.data(), buf.size(), 0)); })
+#endif
+    );
+}
+
+Task<Expected<std::size_t>> socket_write_zc(SocketHandle &sock,
+                                            std::span<char const> buf,
+                                            CancelToken cancel) {
+    co_return static_cast<std::size_t>(
+        co_await expectError(co_await UringOp()
+                                 .prep_send_zc(sock.fileNo(), buf, 0, 0)
+                                 .cancelGuard(cancel))
+#if CO_ASYNC_INVALFIX
+        .or_else(std::errc::invalid_argument, [&] { return expectError(send(sock.fileNo(), buf.data(), buf.size(), 0)); })
+#endif
+    );
+}
+
+Task<Expected<std::size_t>> socket_read(SocketHandle &sock, std::span<char> buf,
+                                        CancelToken cancel) {
+    co_return static_cast<std::size_t>(
+        co_await expectError(co_await UringOp()
+                                 .prep_recv(sock.fileNo(), buf, 0)
+                                 .cancelGuard(cancel))
+#if CO_ASYNC_INVALFIX
+        .or_else(std::errc::invalid_argument, [&] { return expectError(recv(sock.fileNo(), buf.data(), buf.size(), 0)); })
+#endif
+        );
+}
+
+Task<Expected<std::size_t>>
+socket_write(SocketHandle &sock, std::span<char const> buf,
+             std::chrono::steady_clock::duration timeout) {
+    auto ts = durationToKernelTimespec(timeout);
+    co_return static_cast<std::size_t>(
+        co_await expectError(co_await UringOp::link_ops(
+            UringOp().prep_send(sock.fileNo(), buf, 0),
+            UringOp().prep_link_timeout(&ts, IORING_TIMEOUT_BOOTTIME)))
+#if CO_ASYNC_INVALFIX
+        .or_else(std::errc::invalid_argument, [&] { return expectError(send(sock.fileNo(), buf.data(), buf.size(), 0)); })
+#endif
+        );
+}
+
+Task<Expected<std::size_t>>
+socket_read(SocketHandle &sock, std::span<char> buf,
+            std::chrono::steady_clock::duration timeout) {
+    auto ts = durationToKernelTimespec(timeout);
+    co_return static_cast<std::size_t>(
+        co_await expectError(co_await UringOp::link_ops(
+            UringOp().prep_recv(sock.fileNo(), buf, 0),
+            UringOp().prep_link_timeout(&ts, IORING_TIMEOUT_BOOTTIME)))
+#if CO_ASYNC_INVALFIX
+        .or_else(std::errc::invalid_argument, [&] { return expectError(recv(sock.fileNo(), buf.data(), buf.size(), 0)); })
+#endif
+        );
+}
+
+Task<Expected<std::size_t>>
+socket_write(SocketHandle &sock, std::span<char const> buf,
+             std::chrono::steady_clock::duration timeout, CancelToken cancel) {
+    auto ts = durationToKernelTimespec(timeout);
+    co_return static_cast<std::size_t>(co_await expectError(
+        co_await UringOp::link_ops(
+            UringOp().prep_send(sock.fileNo(), buf, 0),
+            UringOp().prep_link_timeout(&ts, IORING_TIMEOUT_BOOTTIME))
+            .cancelGuard(cancel))
+#if CO_ASYNC_INVALFIX
+        .or_else(std::errc::invalid_argument, [&] { return expectError(send(sock.fileNo(), buf.data(), buf.size(), 0)); })
+#endif
+    );
+}
+
+Task<Expected<std::size_t>>
+socket_read(SocketHandle &sock, std::span<char> buf,
+            std::chrono::steady_clock::duration timeout, CancelToken cancel) {
+    auto ts = durationToKernelTimespec(timeout);
+    co_return static_cast<std::size_t>(co_await expectError(
+        co_await UringOp::link_ops(
+            UringOp().prep_recv(sock.fileNo(), buf, 0),
+            UringOp().prep_link_timeout(&ts, IORING_TIMEOUT_BOOTTIME))
+            .cancelGuard(cancel))
+#if CO_ASYNC_INVALFIX
+        .or_else(std::errc::invalid_argument, [&] { return expectError(recv(sock.fileNo(), buf.data(), buf.size(), 0)); })
+#endif
+        );
+}
+
+Task<Expected<>> socket_shutdown(SocketHandle &sock, int how) {
+    co_return expectError(co_await UringOp().prep_shutdown(sock.fileNo(), how));
 }
 } // namespace co_async
 
