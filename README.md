@@ -15,14 +15,14 @@
 - 支持[I/O 超时](examples/io_timeout.cpp)
 - 支持[任务取消](examples/cancel_test.cpp)
 - [创建进程并读写管道](examples/pipe_read.cpp)
-- 支持[用户态管道](examples/pipe_test.cpp)
+- 支持[用户态管道](examples/pipe_write.cpp)
 - [线程池执行阻塞任务](examples/blocking_test.cpp)
 - [条件变量](examples/condvar_test.cpp)
 - [异步队列](examples/queue_test.cpp)
 - 支持[inotify](examples/inotify.cpp)
 - 支持[futex](examples/futex_test.cpp)
 - 支持[多线程](examples/server_mt.cpp)
-- 可实现 [HTTP 转发](examples/proxy_server.cpp)
+- 可实现 [HTTP 转发](examples/proxy_route.cpp)
 - 自动识别 `http(s)_proxy` 代理
 - [文件服务器](examples/file_server.cpp)
 - [异步读写文件](examples/read_file.cpp)
@@ -171,17 +171,19 @@ target_link_libraries(你的名字 PRIVATE co_async)
 
 Linux 编译选项：`-std=c++20 -I 本项目根目录 -luring -lbearssl`
 
-- liburing >= 2.6
+- liburing >= 2.5
 - bearssl >= 0.6
 
 ### 额外 CMake 选项
 
 ```bash
 cmake -B build -DCO_ASYNC_DEBUG=ON  # 启用调试与安全性检测
+cmake -B build -DCO_ASYNC_SAFERET=ON  # 启用更保守的 co_await 就绪判定
 cmake -B build -DCO_ASYNC_EXCEPT=ON  # 启用异常（会影响协程函数性能）
 cmake -B build -DCO_ASYNC_PERF=ON  # 启用性能测试（程序结束时自动打印测时结果）
 cmake -B build -DCO_ASYNC_ZLIB=ON  # 启用压缩支持（需要链接 /usr/lib/libz.so）
 cmake -B build -DCO_ASYNC_STEAL=ON  # 启用多线程任务窃取（类似于 TBB）
+cmake -B build -DCO_ASYNC_CUDA=ON  # 启用 CUDA 支持（需要 CUDA 工具链）
 cmake -B build -DCO_ASYNC_ALLOC=ON  # 启用自定义分配器（基于 C++17 PMR）
 cmake -B build -DCO_ASYNC_DIRECT=ON  # 启用直接 IO 轮询（仅限数据库应用场景）
 cmake -B build -DCO_ASYNC_INVALFIX=ON  # 尝试修复低 Linux 内核版本的错误
