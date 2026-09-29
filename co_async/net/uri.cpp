@@ -9,6 +9,8 @@ std::uint8_t fromHex(char c) {
         return static_cast<std::uint8_t>(c - '0');
     } else if ('A' <= c && c <= 'F') {
         return static_cast<std::uint8_t>(c - 'A' + 10);
+    } else if ('a' <= c && c <= 'f') {
+        return static_cast<std::uint8_t>(c - 'a' + 10);
     } else [[unlikely]] {
         return 0;
     }
