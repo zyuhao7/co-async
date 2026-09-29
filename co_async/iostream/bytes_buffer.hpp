@@ -150,6 +150,7 @@ public:
     }
 
     void allocate(std::size_t size) {
+        pageAlignedFree(mData, mSize);
         mData = static_cast<char *>(pageAlignedAlloc(size));
         mSize = size;
     }
