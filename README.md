@@ -88,6 +88,8 @@ int main() {
 - GCC >= 10
 - Clang >= 16
 
+> 5.19 是声明下限：`IORING_OP_SOCKET`、`IORING_OP_FUTEX_WAIT`/`FUTEX_WAKE`、`IORING_OP_WAITID` 都是 5.19 才进入 io_uring，`IORING_OP_SEND_ZC` 要 6.0。打开 `CO_ASYNC_INVALFIX` 后它们都有等价降级（`socket(2)` / 经典 `futex` / `send(2)` / `waitid(2)` 加 `WNOHANG` 轮询），低于 5.19 的内核上也能跑，代价是这些路径失去 io_uring 的异步或零拷贝特性。`CO_ASYNC_DIRECT`（`O_DIRECT` + `IORING_SETUP_IOPOLL`）是未完成的实验开关，普通文件 IO 与 IOPOLL 混用本身就不成立，不要打开。
+
 小彭老师推荐使用 Arch Linux 系统作为开发平台：
 
 ```bash
