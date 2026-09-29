@@ -42,7 +42,9 @@ struct FSPipeHandlePair {
 
 inline Task<Expected<FSPipeHandlePair>> fs_pipe() {
     int p[2];
-    int res = pipe2(p, 0);
+    // 必须 O_CLOEXEC：否则 spawn 出的子进程会连对端一起继承（例如写端落到
+    // `cat` 手里），对端就永远等不到 EOF。
+    int res = pipe2(p, O_CLOEXEC);
     if (res < 0) [[unlikely]] {
         res = -errno;
     }
