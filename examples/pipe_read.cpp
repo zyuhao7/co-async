@@ -15,7 +15,9 @@ static Task<Expected<>> amain() {
                    .spawn();
     auto rs = file_from_handle(p.reader());
     String line;
-    while (line.clear(), co_await rs.getline(line, '\n')) {
+    for (;;) {
+        line.clear();
+        if (!co_await rs.getline(line, '\n')) break;
         co_await co_await stdio().putline("process output: " + line);
     }
     co_await rs.close();
