@@ -411,8 +411,14 @@ public:
     // };
 
     Task<int> cancelGuard(CancelToken cancel) && {
+        // flags 必须留 0（按 user_data 精确取消这一个请求）。带
+        // IORING_ASYNC_CANCEL_ALL 时本机 5.15 内核在 io_async_cancel_prep 里
+        // 直接回 -EINVAL，取消请求本身失败、目标 op 照旧挂着——于是全库的
+        // cancelGuard（socket/futex/fs 十几个调用点）统统变成空操作。每个
+        // UringOp 的 user_data 就是它自己的地址（见构造函数里的
+        // io_uring_sqe_set_data），按 user_data 取消正是这里要的粒度。
         CancelCallback _(cancel, [this]() -> Task<> {
-            co_await UringOp().prep_cancel(this, IORING_ASYNC_CANCEL_ALL);
+            co_await UringOp().prep_cancel(this, 0);
         });
         co_return co_await std::move(*this);
     }

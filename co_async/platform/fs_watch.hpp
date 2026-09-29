@@ -62,14 +62,22 @@ struct FileWatch {
     };
 
     Task<Expected<WaitFileResult>> wait() {
-        if (!co_await mStream.getstruct(*mEventBuffer)) [[unlikely]] {
-            throw std::runtime_error("EOF while reading struct");
-        }
+        // 双重 co_await：外层拿 Task 里的 Expected，内层由 TaskPromise 的
+        // await_transform 接住——出错就地 return，不再 throw。原来读失败（尤其
+        // 是被取消时的 operation_canceled）直接 throw std::runtime_error，把取消
+        // 伪装成「EOF while reading struct」，没被接住就是 terminate/abort。
+        co_await co_await mStream.getstruct(*mEventBuffer);
         String name;
         name.reserve(mEventBuffer->len);
         co_await co_await mStream.getn(name, mEventBuffer->len);
         name = name.c_str();
-        auto path = mWatches.at(mEventBuffer->wd);
+        // 不能用 at()：删掉/被移走的 watch 会回 IN_IGNORED，wd 已不在表里，
+        // at() 抛 out_of_range 同样是从 Task<Expected<>> 里抛出。
+        auto it = mWatches.find(mEventBuffer->wd);
+        if (it == mWatches.end()) [[unlikely]] {
+            co_return std::errc::no_such_file_or_directory;
+        }
+        auto path = it->second;
         if (!name.empty()) {
             path /= make_path(name);
         }

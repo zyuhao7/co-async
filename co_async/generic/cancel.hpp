@@ -39,17 +39,26 @@ struct CancelSourceImpl {
             co_return;
         }
         mCanceled = true;
-        if (!mCancellers.empty()) {
-            std::vector<Task<>> tasks;
-            for (auto &canceller: mCancellers) {
-                tasks.push_back(canceller.doCancel());
-            }
-            /* for (auto &&task: tasks) { */
-            /*     co_await task; */
-            /* } */
-            co_await when_all(tasks);
-            mCancellers.clear();
+        if (mCancellers.empty()) {
+            co_return;
         }
+        // 先把待取消项摘成裸指针表、并清空链表，再逐个回调：取消回调是同步
+        // 的（co_sleep 的 canceller 直接 resume 被取消的协程），被唤醒的协程
+        // 可能一路跑完并释放本 impl——取消源就建在同一个协程帧里是常见写法。
+        // 之后任何对 mCancellers 的访问（包括原来 for 循环的 ++ 和收尾的
+        // clear）都是释放后使用；节点析构时的自摘链也因为链接已被清空而变成
+        // 空操作。doCancel 的协程帧虽然还持有 this，但不再解引用它。
+        std::vector<CancellerBase *> cancellers;
+        for (auto &canceller: mCancellers) {
+            cancellers.push_back(&canceller);
+        }
+        mCancellers.clear();
+        std::vector<Task<>> tasks;
+        tasks.reserve(cancellers.size());
+        for (auto *canceller: cancellers) {
+            tasks.push_back(canceller->doCancel());
+        }
+        co_await when_all(tasks);
     }
 
     bool doIsCanceled() const noexcept {
