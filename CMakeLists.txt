@@ -268,12 +268,8 @@ if (PROJECT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
         target_link_libraries(${name} PRIVATE co_async)
     endforeach()
 
-    file(GLOB test_sources tests/*.cpp)
-    foreach(path ${test_sources})
-        get_filename_component(name ${path} NAME_WE)
-        add_executable(${name} ${path})
-        target_link_libraries(${name} PRIVATE co_async)
-    endforeach()
+    include(CTest)
+    add_subdirectory(tests)
 endif()
 
 add_custom_target(format
