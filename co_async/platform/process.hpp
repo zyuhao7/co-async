@@ -161,9 +161,13 @@ struct ProcessBuilder {
         return *this;
     }
 
+    // O_CLOEXEC：两端都不能漏进子进程。本 builder 自己的子进程靠下面的
+    // close() 文件动作（addclose）清掉，但别的 builder 起的进程没这个动作，
+    // 只要我们还持有这两根流，它们就会把管道端一起 exec 进去，写端因此永不
+    // 见 EOF。dup2 的目标 fd 会被 dup2 清掉 CLOEXEC，子进程该拿到的那端不受影响。
     ProcessBuilder &pipe_out(int fd, OwningStream &stream) {
         int p[2];
-        throwingErrorErrno(pipe2(p, 0));
+        throwingErrorErrno(pipe2(p, O_CLOEXEC));
         open(fd, FileHandle(p[1]));
         stream = file_from_handle(FileHandle(p[0]));
         close(p[0]);
@@ -173,7 +177,7 @@ struct ProcessBuilder {
 
     ProcessBuilder &pipe_in(int fd, OwningStream &stream) {
         int p[2];
-        throwingErrorErrno(pipe2(p, 0));
+        throwingErrorErrno(pipe2(p, O_CLOEXEC));
         open(fd, FileHandle(p[0]));
         stream = file_from_handle(FileHandle(p[1]));
         close(p[0]);

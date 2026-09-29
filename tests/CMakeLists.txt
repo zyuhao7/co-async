@@ -29,9 +29,14 @@ foreach(path ${test_sources})
 
     if (CO_ASYNC_CTEST_VALGRIND)
         find_program(CO_ASYNC_VALGRIND_EXECUTABLE valgrind REQUIRED)
+        # --undef-value-errors=no：io_uring 的读是「内核直接写进用户缓冲区」，
+        # memcheck 看不见这次写入，于是任何走 stream 缓冲的读都会把刚读到的字节
+        # 报成 uninitialised（假阳性，来源指向 BytesBuffer::pageAlignedAllocate）。
+        # 阶段 5/6 手工跑 valgrind 时一直带这个开关，这里对齐。
         add_test(NAME unit/${name}
                  COMMAND ${CO_ASYNC_VALGRIND_EXECUTABLE} --error-exitcode=99
-                         --quiet $<TARGET_FILE:${name}>)
+                         --quiet --leak-check=full --undef-value-errors=no
+                         $<TARGET_FILE:${name}>)
         set_tests_properties(unit/${name} PROPERTIES TIMEOUT 300)
     else()
         add_test(NAME unit/${name} COMMAND $<TARGET_FILE:${name}>)
