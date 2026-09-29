@@ -494,7 +494,7 @@ struct BorrowedStream {
 
     Task<Expected<std::size_t>> write(std::span<char const> buffer) {
         if (!buffull()) {
-            auto n = std::min(mInBuffer.size() - mInIndex, buffer.size());
+            auto n = std::min(mOutBuffer.size() - mOutIndex, buffer.size());
             co_await co_await putspan(buffer.subspan(0, n));
             co_return n;
         }
