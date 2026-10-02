@@ -169,53 +169,152 @@ private:
         fixViolation(node);
     }
 
+    // 用 v 顶替 u 在树里的位置。u 的位置由调用方负责不再被引用。
+    void moveInto(RbNode *u, RbNode *v) noexcept {
+        if (u->rbParent == nullptr) {
+            root = v;
+        } else if (u == u->rbParent->rbLeft) {
+            u->rbParent->rbLeft = v;
+        } else {
+            u->rbParent->rbRight = v;
+        }
+        if (v != nullptr) {
+            v->rbParent = u->rbParent;
+        }
+    }
+
+    // 删除后的双黑修复。node 是丢了黑色的那个位置，可能为空；此时 gapParent
+    // 给出这个空位置挂在谁下面。每轮用 node 自己的 rbParent 覆盖它。
+    void fixLostBlack(RbNode *node, RbNode *gapParent) noexcept {
+        while (node != root && (node == nullptr || node->rbColor == BLACK)) {
+            if (node != nullptr) {
+                gapParent = node->rbParent;
+            }
+            if (gapParent == nullptr) {
+                break;
+            }
+            if (node == gapParent->rbLeft) {
+                RbNode *brother = gapParent->rbRight;
+                if (brother == nullptr) {
+                    break;
+                }
+                if (brother->rbColor == RED) {
+                    brother->rbColor = BLACK;
+                    gapParent->rbColor = RED;
+                    rotateLeft(gapParent);
+                    brother = gapParent->rbRight;
+                    if (brother == nullptr) {
+                        break;
+                    }
+                }
+                bool farBlack = brother->rbRight == nullptr ||
+                                  brother->rbRight->rbColor == BLACK;
+                bool nearBlack = brother->rbLeft == nullptr ||
+                                  brother->rbLeft->rbColor == BLACK;
+                if (farBlack && nearBlack) {
+                    brother->rbColor = RED;
+                    node = gapParent;
+                } else {
+                    if (farBlack) {
+                        brother->rbLeft->rbColor = BLACK;
+                        brother->rbColor = RED;
+                        rotateRight(brother);
+                        brother = gapParent->rbRight;
+                        if (brother == nullptr) {
+                            break;
+                        }
+                    }
+                    brother->rbColor = gapParent->rbColor;
+                    gapParent->rbColor = BLACK;
+                    brother->rbRight->rbColor = BLACK;
+                    rotateLeft(gapParent);
+                    node = root;
+                }
+            } else {
+                RbNode *brother = gapParent->rbLeft;
+                if (brother == nullptr) {
+                    break;
+                }
+                if (brother->rbColor == RED) {
+                    brother->rbColor = BLACK;
+                    gapParent->rbColor = RED;
+                    rotateRight(gapParent);
+                    brother = gapParent->rbLeft;
+                    if (brother == nullptr) {
+                        break;
+                    }
+                }
+                bool farBlack = brother->rbLeft == nullptr ||
+                                  brother->rbLeft->rbColor == BLACK;
+                bool nearBlack = brother->rbRight == nullptr ||
+                                  brother->rbRight->rbColor == BLACK;
+                if (farBlack && nearBlack) {
+                    brother->rbColor = RED;
+                    node = gapParent;
+                } else {
+                    if (farBlack) {
+                        brother->rbRight->rbColor = BLACK;
+                        brother->rbColor = RED;
+                        rotateLeft(brother);
+                        brother = gapParent->rbLeft;
+                        if (brother == nullptr) {
+                            break;
+                        }
+                    }
+                    brother->rbColor = gapParent->rbColor;
+                    gapParent->rbColor = BLACK;
+                    brother->rbLeft->rbColor = BLACK;
+                    rotateRight(gapParent);
+                    node = root;
+                }
+            }
+        }
+        if (node != nullptr) {
+            node->rbColor = BLACK;
+        }
+    }
+
     void doErase(RbNode *current) noexcept {
         current->rbTree = nullptr;
-        RbNode *node = nullptr;
-        RbNode *child = nullptr;
+
+        RbNode *child = nullptr;         // 顶上它位置的子树（可能为空）
+        RbNode *gapParent = nullptr; // child 为空时，空位置挂谁下面
         RbColor color = RED;
+
         if (current->rbLeft != nullptr && current->rbRight != nullptr) {
-            RbNode *replace = current;
-            replace = replace->rbRight;
+            // 侵入式容器不能搬值，只能把后继节点整棵挪进被删位置。
+            RbNode *replace = current->rbRight;
             while (replace->rbLeft != nullptr) {
                 replace = replace->rbLeft;
             }
-            if (current != replace->rbParent) {
-                current->rbParent->rbLeft = replace->rbRight;
+            color = replace->rbColor;
+            child = replace->rbRight;
+            gapParent = replace->rbParent;
+
+            if (replace->rbParent != current) {
+                moveInto(replace, replace->rbRight);
                 replace->rbRight = current->rbRight;
-                current->rbRight->rbParent = replace;
+                replace->rbRight->rbParent = replace;
             } else {
-                replace->rbParent = current;
+                gapParent = replace;
             }
-            if (current == root) {
-                root = replace;
-            } else if (current->rbParent->rbLeft == current) {
-                current->rbParent->rbLeft = replace;
-            } else {
-                current->rbParent->rbRight = replace;
-            }
+            moveInto(current, replace);
             replace->rbLeft = current->rbLeft;
-            current->rbLeft->rbParent = replace;
-            node = replace;
-            color = node->rbColor;
-            child = node->rbRight;
+            replace->rbLeft->rbParent = replace;
+            replace->rbColor = current->rbColor;
         } else {
-            node = current;
-            color = node->rbColor;
-            child = (node->rbLeft != nullptr) ? node->rbLeft : node->rbRight;
+            color = current->rbColor;
+            child = (current->rbLeft != nullptr) ? current->rbLeft
+                                                 : current->rbRight;
+            gapParent = current->rbParent;
+            moveInto(current, child);
         }
         if (child != nullptr) {
-            child->rbParent = node->rbParent;
+            gapParent = child->rbParent;
         }
-        if (node == root) {
-            root = child;
-        } else if (node->rbParent->rbLeft == node) {
-            node->rbParent->rbLeft = child;
-        } else {
-            node->rbParent->rbRight = child;
-        }
-        if (color == BLACK && root) {
-            fixViolation(child ? child : node->rbParent);
+
+        if (color == BLACK) {
+            fixLostBlack(child, gapParent);
         }
     }
 
