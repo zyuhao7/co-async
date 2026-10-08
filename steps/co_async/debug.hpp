@@ -10,6 +10,11 @@
 #include <sstream>
 #include <memory>
 #include <unordered_map>
+#include <limits>
+#include <stdexcept>
+#include <tuple>
+#include <iterator>
+#include <cstdlib>
 #if defined(__unix__) && __has_include(<cxxabi.h>)
 #include <cxxabi.h>
 #endif
@@ -27,7 +32,9 @@ private:
     } state;
 
     char const *line;
-    std::source_location const &loc;
+    // 按值存：source_location::current() 是临时值，存引用的话构造函数一返回就悬垂
+    // （只有 debug() 当临时对象、整条语句用完才碰巧不炸，具名 debug 必挂）
+    std::source_location loc;
 
     static void uni_quotes(std::ostream &oss, std::string_view sv, char quote) {
         oss << quote;
@@ -350,9 +357,13 @@ public:
         return on_print(std::forward<T>(t));
     }
 
-    ~debug() noexcept(false) {
+    ~debug() noexcept {
         if (state == panic) [[unlikely]] {
-            throw std::runtime_error(oss.str());
+            // 断言失败不能从析构里抛：栈正在展开时会直接 std::terminate
+            // （而且一个析构抛异常本身也不安全）。打印完就 abort，跟 assert 一个效果
+            oss << '\n';
+            std::cerr << oss.str();
+            std::abort();
         }
         if (state == print) {
             oss << '\n';
@@ -385,7 +396,7 @@ struct debug {
         return *this;
     }
 
-    ~debug() noexcept(false) {}
+    ~debug() noexcept {}
 
 private:
     struct debug_condition {

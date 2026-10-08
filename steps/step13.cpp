@@ -131,6 +131,7 @@ co_async::Task<std::string> reader() {
 co_async::Task<void> async_main() {
     while (true) {
         auto s = co_await reader();
+        if (s.empty()) break; // EOF：对端关闭，别在这儿死循环
         debug(), "读到了", s;
         if (s == "quit\n") break;
     }
