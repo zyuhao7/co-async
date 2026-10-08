@@ -38,6 +38,23 @@
 
 > [steps 目录](steps) 是本库代码逐渐成形的过程，可以配合教学视频自己动手尝试。
 
+## 构建与运行 steps 阶梯
+
+`steps/` 里的每一步都是可直接编译运行的单文件，**不需要 CMake**，用 g++ 直接编即可：
+
+```bash
+g++ -std=c++20 -O0 -g -Isteps steps/step16.cpp -o /tmp/step16
+/tmp/step16
+```
+
+- `-Isteps` 是为了让 `#include "co_async/..."` 找到 `steps/co_async/` 下的头文件。
+- `step8`、`step9`、`step10` **不存在**，阶梯从 `step7` 直接跳到 `step11`。其中 `step1`–`step7` 是自包含的（Task/Promise/Loop 都写在文件里），`step11`–`step24` 共享同一份 `steps/co_async/*.hpp`。
+- `step12`–`step18`、`step20` 从标准输入读数据，直接运行即可交互。
+- `step17` 是终端小游戏，**必须在真正的 tty 里运行**（`w`/`a`/`s`/`d` 移动、`q` 退出）。若退出后终端按键不回显，执行 `stty sane` 恢复。
+- `step23`、`step24` 是本地 HTTP 服务端，分别监听 `127.0.0.1:8080` 和 `:8081`，用 `curl 127.0.0.1:8080/` 验证。
+- `step6` 运行时会 SIGSEGV，这是**有意为之的对照**：它的 `when_any` 析构输家后，`std::priority_queue` 定时器里仍留着悬挂的协程句柄，正是 `step7` 改用可摘除的红黑树要解决的问题。
+- `step21`、`step22` 会访问外部服务 `142857.red:8080`；该地址不可用时属于环境问题，把地址改成本地服务即可。
+
 ## 使用案例
 
 ```cpp
