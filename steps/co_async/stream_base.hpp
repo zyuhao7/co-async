@@ -177,7 +177,7 @@ struct [[nodiscard]] OStream : OStreamBase<OStream<StreamBuf>>, StreamBuf {
 };
 
 template <class StreamBuf>
-struct [[nodiscard]] IStream : IStreamBase<OStream<StreamBuf>>, StreamBuf {
+struct [[nodiscard]] IStream : IStreamBase<IStream<StreamBuf>>, StreamBuf {
     template <class... Args>
         requires std::constructible_from<StreamBuf, Args...>
     explicit IStream(Args &&...args)

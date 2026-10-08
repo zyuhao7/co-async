@@ -20,8 +20,7 @@
 
 using namespace std::chrono_literals;
 
-co_async::EpollLoop epollLoop;
-co_async::TimerLoop timerLoop;
+co_async::AsyncLoop loop;
 
 char map[20][20];
 int x = 10;
@@ -91,14 +90,16 @@ inline co_async::Task<std::string> read_string(co_async::EpollLoop &loop, co_asy
 
 co_async::Task<> async_main() {
     co_async::AsyncFile file(STDIN_FILENO);
+    file.setNonblock(); // readFileSync 是非阻塞读，fd 必须先置为非阻塞
     auto nextTp = std::chrono::system_clock::now();
     running = true;
     while (true) {
-        auto res = co_await limit_timeout(timerLoop, read_string(epollLoop, file), nextTp);
-        if (res) {
+        auto res = co_await limit_timeout(loop, read_string(loop, file), nextTp);
+        if (res && !res->empty()) {
             for (char c: *res) {
                 on_key(c);
             }
+            if (!running) break; // 玩家按了 q
             on_draw();
         } else {
             on_time();
@@ -110,7 +111,6 @@ co_async::Task<> async_main() {
 }
 
 int main() {
-    co_async::AsyncLoop loop;
     auto t = async_main();
     run_task(loop, t);
     return 0;

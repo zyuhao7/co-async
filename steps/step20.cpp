@@ -16,12 +16,16 @@ using namespace std::literals;
 co_async::AsyncLoop loop;
 
 co_async::Task<> amain() {
-    co_async::Istream ain(loop, co_async::async_stdin(true));
-    while (true) {
-        auto s = co_await ain.getline(": ");
-        debug(), s;
-        s = co_await ain.getline('\n');
-        debug(), s;
+    co_async::IStream<co_async::StdioBuf> ain(loop);
+    try {
+        while (true) {
+            auto s = co_await ain.getline(": ");
+            debug(), s;
+            s = co_await ain.getline('\n');
+            debug(), s;
+        }
+    } catch (co_async::EOFException const &) {
+        debug(), "输入结束";
     }
     co_return;
 }

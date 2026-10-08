@@ -122,8 +122,16 @@ co_async::Task<std::string> reader(int fileNo) {
             if (errno != EWOULDBLOCK) [[unlikely]] {
                 throw std::system_error(errno, std::system_category());
             }
+            // 这一轮非阻塞读已经读干，收下已读部分走人
+            s.resize(exist);
+            break;
         }
-        if (len != chunk) {
+        if (len == 0) {
+            // EOF：对端关闭
+            s.resize(exist);
+            break;
+        }
+        if ((size_t)len != chunk) {
             s.resize(exist + len);
             break;
         }
@@ -134,11 +142,9 @@ co_async::Task<std::string> reader(int fileNo) {
 }
 
 co_async::Task<void> async_main() {
-    int file = co_async::checkError(open("CMakeLists.txt", O_RDONLY | O_NONBLOCK));
     while (true) {
-        auto v = co_await when_any(reader(STDIN_FILENO), reader(file));
-        std::string s;
-        std::visit([&] (std::string const &v) { s = v; }, v);
+        auto s = co_await reader(STDIN_FILENO);
+        if (s.empty()) break; // EOF：对端关闭
         debug(), "读到了", s;
         if (s == "quit\n") break;
     }
@@ -149,9 +155,12 @@ int main() {
     ioctl(0, FIONBIO, &attr);
 
     auto t = async_main();
-    t.mCoroutine.resume();
-    while (!t.mCoroutine.done()) {
-        if (auto delay = timerLoop.tryRun()) {
+    // 顶层任务没人 co_await 它，final_suspend 需要一个落脚点，否则 resume 空句柄崩溃
+    std::coroutine_handle<co_async::Promise<void>> h = t;
+    h.promise().mPrevious = std::noop_coroutine();
+    h.resume();
+    while (!h.done()) {
+        if (auto delay = timerLoop.run()) {
             auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(*delay).count();
             epollLoop.tryRun(ms);
         } else {

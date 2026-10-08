@@ -43,12 +43,17 @@ int main() {
             char c;
             while (true) {
                 int len = read(fd, &c, 1);
-                if (len <= 0) { // 表示需要阻塞了
+                if (len == 0) { // 读完了（对端关闭），收工走人
+                    debug(), "输入结束";
+                    return 0;
+                }
+                if (len == -1) { // 表示需要阻塞了
                     if (errno == EWOULDBLOCK) {
                         debug(), "read: 前面的区域，以后再来探索8～";
                         break;
                     }
                     debug(), "read出错了", strerror(errno);
+                    break;
                 }
                 debug(), c;
             }

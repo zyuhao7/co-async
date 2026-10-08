@@ -113,7 +113,8 @@ co_async::EpollLoop epollLoop;
 co_async::TimerLoop timerLoop;
 
 co_async::Task<std::string> reader(int fileNo) {
-    co_await wait_file(epollLoop, fileNo, EPOLLIN);
+    uint32_t events = co_await wait_file(epollLoop, fileNo, EPOLLIN);
+    debug(), "可读事件掩码", events;
     std::string s;
     size_t chunk = 8;
     while (true) {
@@ -125,8 +126,16 @@ co_async::Task<std::string> reader(int fileNo) {
             if (errno != EWOULDBLOCK) [[unlikely]] {
                 throw std::system_error(errno, std::system_category());
             }
+            // 这一轮非阻塞读已经读干，收下已读部分走人
+            s.resize(exist);
+            break;
         }
-        if (len != chunk) {
+        if (len == 0) {
+            // EOF：对端关闭
+            s.resize(exist);
+            break;
+        }
+        if ((size_t)len != chunk) {
             s.resize(exist + len);
             break;
         }
@@ -137,12 +146,11 @@ co_async::Task<std::string> reader(int fileNo) {
 }
 
 co_async::Task<void> async_main() {
-    int file = co_async::checkError(open("/dev/stdin", O_RDONLY | O_NONBLOCK));
     while (true) {
-        debug(), "开始读";
-        auto v = co_await when_any(reader(STDIN_FILENO), reader(file));
-        std::string s;
-        std::visit([&] (std::string const &v) { s = v; }, v);
+        // reader 内部的 wait_file 现在把「本次触发的事件掩码」作为
+        // Promise<uint32_t> 的返回值交回来（step13/14 的 Promise<void> 做不到）
+        auto s = co_await reader(STDIN_FILENO);
+        if (s.empty()) break; // EOF：对端关闭
         debug(), "读到了", s;
         if (s == "quit\n") break;
     }
@@ -153,9 +161,12 @@ int main() {
     ioctl(0, FIONBIO, &attr);
 
     auto t = async_main();
-    t.mCoroutine.resume();
-    while (!t.mCoroutine.done()) {
-        auto timeout = timerLoop.tryRun();
+    // 顶层任务没人 co_await 它，final_suspend 需要一个落脚点，否则 resume 空句柄崩溃
+    std::coroutine_handle<co_async::Promise<void>> h = t;
+    h.promise().mPrevious = std::noop_coroutine();
+    h.resume();
+    while (!h.done()) {
+        auto timeout = timerLoop.run();
         epollLoop.tryRun(timeout);
     }
 

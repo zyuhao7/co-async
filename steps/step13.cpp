@@ -113,6 +113,10 @@ co_async::Task<std::string> reader() {
     while (true) {
         char c;
         ssize_t len = read(0, &c, 1);
+        if (len == 0) {
+            // 管道读尽（对端关闭），及时收手，否则会死循环
+            break;
+        }
         if (len == -1) {
             if (errno != EWOULDBLOCK) [[unlikely]] {
                 throw std::system_error(errno, std::system_category());
@@ -137,9 +141,12 @@ int main() {
     ioctl(0, FIONBIO, &attr);
 
     auto t = async_main();
-    t.mCoroutine.resume();
-    while (!t.mCoroutine.done()) {
-        if (auto delay = timerLoop.tryRun()) {
+    // 顶层任务没人 co_await 它，final_suspend 需要一个落脚点，否则 resume 空句柄崩溃
+    std::coroutine_handle<co_async::Promise<void>> h = t;
+    h.promise().mPrevious = std::noop_coroutine();
+    h.resume();
+    while (!h.done()) {
+        if (auto delay = timerLoop.run()) {
             auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(*delay).count();
             epollLoop.tryRun(ms);
         } else {
